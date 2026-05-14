@@ -122,7 +122,7 @@ No MetaMask or browser wallet required. The frontend connects directly to the Ha
 
 ```bash
 git clone https://github.com/shettysiddhanth/FITE2010_Credit_Union.git
-cd Credit_union
+cd FITE2010_Credit_Union-main
 docker compose run --service-ports hardhat bash
 ```
 

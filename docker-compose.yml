@@ -1,0 +1,11 @@
+services:
+  hardhat:
+    build: .
+    volumes:
+      - .:/app
+      - /app/node_modules
+    ports:
+      - "8545:8545"
+      - "3000:3000"
+    stdin_open: true
+    tty: true

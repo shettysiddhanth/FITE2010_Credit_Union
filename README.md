@@ -121,7 +121,7 @@ No MetaMask or browser wallet required. The frontend connects directly to the Ha
 ### 1. Start the development environment
 
 ```bash
-git clone https://github.com/uddashya/Credit_union.git
+git clone https://github.com/shettysiddhanth/FITE2010_Credit_Union.git
 cd Credit_union
 docker compose run --service-ports hardhat bash
 ```

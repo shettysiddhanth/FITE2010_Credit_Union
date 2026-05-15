@@ -173,10 +173,11 @@ async function refreshTab(tab) {
 
 async function renderOverview() {
   try {
-    const [pool, memberValue, weight, memberData, paused] = await Promise.all([
+    const [pool, memberValue, weight, totalWeight, memberData, paused] = await Promise.all([
       contract.getPool(),
       contract.getMemberValue(signerAddress),
       contract.computeVotingWeight(signerAddress),
+      contract.getTotalVotingWeight(),
       contract.members(signerAddress),
       contract.paused(),
     ]);
@@ -185,7 +186,7 @@ async function renderOverview() {
     document.getElementById("pool-members").textContent = pool[2].toString();
     document.getElementById("pool-loans").textContent   = pool[3].toString();
     document.getElementById("my-value").textContent     = formatEth(memberValue) + " ETH";
-    document.getElementById("my-weight").textContent    = weight.toString();
+    document.getElementById("my-weight").textContent    = formatVotingWeightPct(weight, totalWeight);
 
     const statusEl = document.getElementById("my-status");
     if (memberData.exists) {
@@ -628,7 +629,25 @@ async function renderHistory() {
     for (const { req, loan } of done) {
       const isRepaid    = Number(req.status) === STATUS.Repaid;
       const badDebt     = loan.totalDue > loan.amountRepaid ? loan.totalDue - loan.amountRepaid : 0n;
-      const seizedNote  = isRepaid ? "" : `Collateral seized; ~${formatEth(loan.collateralLocked)} ETH recovered`;
+      const seized      = loan.collateralLocked ?? 0n;
+      const debtCovered = seized > badDebt ? badDebt : seized;
+      const excessToNonDefaulters = seized > badDebt ? seized - badDebt : 0n;
+      const shortfall   = badDebt > seized ? badDebt - seized : 0n;
+
+      let defaultNote;
+      if (!isRepaid) {
+        const parts = [`Loan unpaid: ${formatEth(badDebt)} ETH`];
+        parts.push(`Collateral seized: ${formatEth(seized)} ETH (covered ${formatEth(debtCovered)} of bad debt`);
+        if (excessToNonDefaulters > 0n) {
+          parts[parts.length - 1] += `; ${formatEth(excessToNonDefaulters)} excess to non-defaulting members)`;
+        } else {
+          parts[parts.length - 1] += `)`;
+        }
+        if (shortfall > 0n) {
+          parts.push(`Socialized shortfall: ${formatEth(shortfall)} ETH`);
+        }
+        defaultNote = parts.join(". ");
+      }
 
       const tr = document.createElement("tr");
       tr.innerHTML = `
@@ -644,9 +663,7 @@ async function renderHistory() {
             : '<span class="chip chip-red">Defaulted</span>'}
         </td>
         <td style="font-size:12px;color:var(--muted)">${
-          isRepaid
-            ? `Full repayment`
-            : `Bad debt: ${formatEth(badDebt)} ETH. ${seizedNote}`
+          isRepaid ? `Full repayment` : defaultNote
         }</td>
       `;
       tbody.appendChild(tr);
@@ -949,6 +966,15 @@ function formatEth(wei) {
 function truncateAddr(addr) {
   if (!addr) return "";
   return addr.slice(0, 6) + "…" + addr.slice(-4);
+}
+
+function formatVotingWeightPct(weight, totalWeight) {
+  const w = BigInt(weight ?? 0);
+  const t = BigInt(totalWeight ?? 0);
+  if (t === 0n) return "0%";
+  // multiply by 10000 first to keep two decimal places of precision
+  const bps = (w * 10000n) / t;
+  return (Number(bps) / 100).toFixed(2) + "%";
 }
 
 function formatDuration(secs) {

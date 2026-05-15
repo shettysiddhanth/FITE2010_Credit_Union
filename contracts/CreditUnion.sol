@@ -486,8 +486,9 @@ contract CreditUnion is ReentrancyGuard {
 
     /**
      * @notice Finalize a loan request after the vote deadline.
-     *         Approval requires votesFor > 50% of total voting weight snapshot
-     *         (abstentions count against).
+     *         Approval requires votesFor > duration-based threshold (50/55/60%) of the
+     *         eligible voting weight, where the borrower's weight is excluded from the
+     *         denominator. Abstentions by other members still count against.
      * @param requestId Loan request ID.
      */
     function finalizeLoan(uint256 requestId) external nonReentrant {
@@ -646,19 +647,50 @@ contract CreditUnion is ReentrancyGuard {
         require(block.timestamp > loan.repaymentDeadline, "Not overdue");
         require(loan.amountRepaid < loan.totalDue, "Already fully repaid");
 
-        // Seize collateral into the pool to offset bad debt
         uint256 seized = collateralHeld[loanId];
+        uint256 grossBadDebt = loan.totalDue - loan.amountRepaid;
+
+        // Split the seized collateral into two parts:
+        //   lossCover = min(seized, grossBadDebt)  — restores the unpaid principal+interest.
+        //                                            All members (including the defaulter)
+        //                                            participate in this share appreciation
+        //                                            because it is just undoing the loss.
+        //   excess    = seized - lossCover         — punitive premium beyond what was owed.
+        //                                            This part must NOT benefit the defaulter,
+        //                                            so we burn just enough of their shares
+        //                                            to keep their per-share value flat
+        //                                            through the excess addition. The excess
+        //                                            then flows entirely to remaining members.
+        uint256 lossCover = seized > grossBadDebt ? grossBadDebt : seized;
+        uint256 excess    = seized > grossBadDebt ? seized - grossBadDebt : 0;
+
         if (seized > 0) {
             collateralHeld[loanId] = 0;
-            totalPoolETH += seized;
+            totalPoolETH += lossCover;
+
+            if (excess > 0) {
+                uint256 defShares = members[loan.borrower].shares;
+                // Only burn if defaulter holds shares AND non-defaulters exist; otherwise
+                // there's no one to redirect the benefit to, so just add the excess plainly.
+                if (defShares > 0 && totalShares > defShares && totalPoolETH > 0) {
+                    // newDefShares chosen so the defaulter's value stays flat:
+                    //   newDefShares × (P + E) / (S − burned) = defShares × P / S
+                    // where P = totalPoolETH (post-lossCover), S = totalShares, E = excess.
+                    // Closed form:
+                    //   newDefShares = defShares × P × (S − defShares)
+                    //                  ÷ [P × (S − defShares) + S × E]
+                    uint256 nonDef = totalShares - defShares;
+                    uint256 numerator   = defShares * totalPoolETH * nonDef;
+                    uint256 denominator = totalPoolETH * nonDef + totalShares * excess;
+                    uint256 newDefShares = numerator / denominator;
+                    uint256 sharesBurned = defShares - newDefShares;
+                    members[loan.borrower].shares = newDefShares;
+                    totalShares -= sharesBurned;
+                }
+                totalPoolETH += excess;
+            }
         }
 
-        // Bad debt is the unrecovered principal+interest after collateral offset.
-        // The principal was already deducted from totalPoolETH at activateLoan.
-        // Partial repayments were already added back.  Collateral is now added back.
-        // Net loss to pool = max(0, (totalDue - amountRepaid) - seized) — already
-        // reflected by the current totalPoolETH level; no further deduction needed.
-        uint256 grossBadDebt = loan.totalDue - loan.amountRepaid;
         uint256 remainingBadDebt = grossBadDebt > seized ? grossBadDebt - seized : 0;
 
         // Keeper bounty: the lesser of (bountyRate % of bad debt) and (MAX_BOUNTY_BPS % of principal)
@@ -903,6 +935,15 @@ contract CreditUnion is ReentrancyGuard {
         uint256 log2Part  = _log2(months + 1);
 
         return sqrtPart * log2Part;
+    }
+
+    /**
+     * @notice Sum of voting weights across all current members. Useful for
+     *         frontends that want to show a member's weight as a percentage
+     *         of total pool voting power.
+     */
+    function getTotalVotingWeight() external view returns (uint256) {
+        return _computeTotalVotingWeight();
     }
 
     /**

@@ -1,6 +1,6 @@
 # On-Chain Credit Union
 
-A production-grade decentralized credit union implemented as a single Solidity smart contract. Members deposit ETH into a shared pool, vote on loan requests using a stake-and-tenure-weighted voting formula, earn yield from interest repayments, and absorb losses from defaults proportionally through share accounting. No external oracles, no governance tokens, just pure ETH.
+A production-grade decentralized credit union implemented as a single Solidity smart contract. Members deposit ETH into a shared pool, vote on loan requests using a stake-and-tenure-weighted voting formula, earn yield from interest repayments, and absorb any uncovered losses from defaults proportionally through share accounting. When a default is collateralized, the punitive excess (seized collateral above bad debt) is redirected exclusively to non-defaulting members via a targeted share burn on the defaulter — defaulters can never benefit from their own seized collateral. No external oracles, no governance tokens, just pure ETH.
 
 ---
 
@@ -22,7 +22,10 @@ Pool shares track each member's proportional ownership of `totalPoolETH`:
 - **First depositor**: shares = depositAmount (1:1 wei)
 - **Subsequent deposits**: `shares = depositAmount × totalShares / totalPoolETH`
 - **Interest repaid** → `totalPoolETH` increases → existing shares appreciate
-- **Default** → keeper bounty deducted from `totalPoolETH` → shares depreciate
+- **Default — bad-debt cover** → seized collateral up to the unpaid amount is added to `totalPoolETH`; every member's shares (including the defaulter's) appreciate, since this part is just restoring the loss
+- **Default — punitive excess** → any seized collateral above the bad debt is added to `totalPoolETH`, but a proportional slice of the defaulter's shares is burned so their per-share value stays flat through this addition. The excess flows entirely to non-defaulting members.
+- **Default — uncovered loss** → if collateral was insufficient, the shortfall stays as a permanent dent in `totalPoolETH` → all members' shares depreciate proportionally
+- **Default — keeper bounty** → small ETH transfer out of `totalPoolETH` → minor share depreciation across remaining members
 
 A member's current ETH value = `memberShares × totalPoolETH / totalShares`.
 
@@ -50,7 +53,7 @@ Approval thresholds are dynamic and depend on loan duration: ≤30 days requires
 
 Trust tier additionally requires no prior default AND (≥1 prior successful repayment OR membership ≥30 days).
 
-Collateral is locked by the borrower at `activateLoan` time and returned on full repayment. On default it is seized into the pool to offset bad debt. These are *base* rates — the effective minimum collateral for any specific request is then adjusted dynamically by loan size and borrower stake (see formulas below).
+Collateral is locked by the borrower at `activateLoan` time and returned in full on successful repayment. On default it is seized into the pool: the portion up to the unpaid principal+interest covers the bad debt, and any **excess** (over-collateralization above what was owed) is redirected exclusively to non-defaulting members through a targeted share burn on the defaulter — so the defaulter cannot benefit from their own forfeited collateral via their pool stake. These are *base* rates — the effective minimum collateral for any specific request is then adjusted dynamically by loan size and borrower stake (see formulas below).
 
 ### Risk-Adjusted Rates & Collateral
 
@@ -288,6 +291,7 @@ Output: **77 tests, all passing**. Test coverage includes:
 | `getLoanRequest(id)` | Full `LoanRequest` struct |
 | `getActiveLoan(id)` | Full `ActiveLoan` struct |
 | `computeVotingWeight(address)` | Member's current voting weight |
+| `getTotalVotingWeight()` | Sum of voting weights across all current members (frontends divide by this to render % weight) |
 | `determineTier(amount, duration)` | `LoanTier` enum for given params |
 | `computeThresholds(borrower, amount, duration)` | `(thresholdRate, thresholdCollateral)` — dynamic min rate and collateral for the loan |
 | `getLiveVoteTotals(requestId)` | `(currentTotalWeight, currentVotesFor, currentVotesAgainst)` using each voter's live weight |

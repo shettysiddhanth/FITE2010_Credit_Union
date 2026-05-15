@@ -229,7 +229,7 @@
             <tr><td>Total Members</td><td>Number of addresses that have joined the union.</td></tr>
             <tr><td>Total Loans</td><td>Cumulative count of all loan requests ever submitted.</td></tr>
             <tr><td>Your ETH Value</td><td>The current ETH value of your pool shares. Increases as interest accrues.</td></tr>
-            <tr><td>Your Voting Weight</td><td>Your influence in loan and governance votes. Zero until you have been a member for ≥ 30 days.</td></tr>
+            <tr><td>Your Voting Weight</td><td>Your influence in loan and governance votes, shown as a percentage of total pool voting power. Zero until you have been a member for ≥ 30 days.</td></tr>
             <tr><td>Membership</td><td>Whether you have an active membership.</td></tr>
           </tbody>
         </table>
@@ -248,7 +248,7 @@
           <li><strong>First depositor</strong> receives shares 1-for-1 with their wei deposit.</li>
           <li><strong>Subsequent depositors</strong> receive <code>shares = deposit × totalShares / totalPoolETH</code>.</li>
           <li>When a borrower repays interest, that ETH enters <code>totalPoolETH</code>. Your share count stays the same but each share is now worth more ETH — this is how you earn yield.</li>
-          <li>When a default is triggered, the keeper bounty is deducted from <code>totalPoolETH</code>, causing every member's share value to decrease proportionally.</li>
+          <li>When a default is triggered, seized collateral up to the bad debt is added back to <code>totalPoolETH</code> (all members participate in the restoration). Any excess collateral beyond the bad debt is also added, but the defaulter's shares are partially burned so the excess flows exclusively to non-defaulting members. The keeper bounty is then deducted, causing a small proportional dip across remaining members. If collateral did not fully cover the bad debt, the shortfall is socialized — all members' share values decrease.</li>
         </ul>
         <p class="guide-desc">Your ETH value at any moment = <code>yourShares × totalPoolETH / totalShares</code>.</p>
       </div>
@@ -262,7 +262,7 @@
           <strong>Submit a request</strong> — Fill in Amount (ETH), Interest Rate (%), Duration (days), and Collateral to Offer (ETH), then click Submit. The form previews your tier, the minimum rate and collateral required for your loan, and whether your offering qualifies for an approval boost. You must be a member with no active loan.
         </div></div>
         <div class="guide-step"><span class="guide-step-num">2</span><div>
-          <strong>Voting window (3 days)</strong> — Other members vote Yes or No. The borrower cannot vote on their own request. Members with zero voting weight (tenure &lt; 30 days) cannot vote. Abstentions count against approval because the threshold is applied against the <em>total</em> member weight, not just those who voted.
+          <strong>Voting window (3 days)</strong> — Other members vote Yes or No. The borrower cannot vote on their own request, and the borrower's weight is excluded from the denominator so they aren't a forced "no" against themselves. Members with zero voting weight (tenure &lt; 30 days) cannot vote. Abstentions by other members still count against approval — the threshold is applied against the <em>eligible</em> voting weight (everyone except the borrower).
         </div></div>
         <div class="guide-step"><span class="guide-step-num">3</span><div>
           <strong>Finalize</strong> — After the 3-day window closes, anyone can click Finalize. Votes are counted using each voter's <em>current</em> weight at finalization time (not the weight they had when they cast). The required majority depends on loan duration and whether the borrower offered a boost (see Approval Thresholds below).
@@ -302,7 +302,7 @@
         <p class="guide-desc">
           <strong>Trust tier extra requirements:</strong> no prior default AND either ≥ 1 prior successful repayment or membership ≥ 30 days.
           Collateral is locked when you activate the loan and is returned automatically on full repayment.
-          On default, collateral is seized into the pool to offset bad debt before losses are socialized across members.
+          On default, collateral is seized into the pool to offset bad debt. Any excess collateral beyond the bad debt flows exclusively to non-defaulting members (the defaulter's shares are partially burned so they cannot benefit). Any uncovered shortfall is socialized across members.
         </p>
         <p class="guide-desc">The figures above are <em>base</em> rates. The actual minimum collateral for your specific loan — displayed as <strong>Min Collateral</strong> on the request form and loan cards — is higher or lower depending on your stake and loan size (see Risk-Adjusted Thresholds below).</p>
       </div>
@@ -343,14 +343,14 @@
       <div class="card">
         <h3>Approval Thresholds &amp; Boost</h3>
         <p class="guide-desc">
-          The fraction of total voting weight required to approve a loan depends on <strong>duration</strong> and on whether the borrower offers a <strong>boost</strong>.
+          The fraction of <em>eligible</em> voting weight required to approve a loan depends on <strong>duration</strong> and on whether the borrower offers a <strong>boost</strong>. Eligible weight = total pool voting weight minus the borrower's own weight (they can't vote on their own loan).
         </p>
         <table class="data-table" style="margin-bottom:14px">
           <thead><tr><th>Duration</th><th>Base Threshold</th></tr></thead>
           <tbody>
-            <tr><td>≤ 30 days</td><td>50% of total weight</td></tr>
-            <tr><td>31 – 90 days</td><td>55% of total weight</td></tr>
-            <tr><td>&gt; 90 days</td><td>60% of total weight</td></tr>
+            <tr><td>≤ 30 days</td><td>50% of eligible weight</td></tr>
+            <tr><td>31 – 90 days</td><td>55% of eligible weight</td></tr>
+            <tr><td>&gt; 90 days</td><td>60% of eligible weight</td></tr>
           </tbody>
         </table>
         <p class="guide-desc">
@@ -379,7 +379,7 @@
           <li><strong>Repay</strong> — Enter any ETH amount up to the remaining balance and click Repay. Partial repayments are accepted. Each payment goes directly back into the pool, increasing every member's share value.</li>
           <li><strong>Repay Remaining</strong> — Appears alongside the Repay input whenever there is any outstanding balance (including dust amounts too small to show in the 4-decimal display). Click it to send the exact remaining wei in one transaction and close the loan cleanly.</li>
           <li><strong>Full repayment</strong> — When the total due is fully paid, the loan closes and any locked collateral is automatically returned to the borrower.</li>
-          <li><strong>Trigger Default</strong> — Appears when a loan is overdue (past its repayment deadline). Anyone can trigger it. The caller earns a keeper bounty (≤ 2% of the loan). Collateral is seized into the pool first to offset bad debt, then remaining losses are socialized across all members.</li>
+          <li><strong>Trigger Default</strong> — Appears when a loan is overdue (past its repayment deadline). Anyone can trigger it. The caller earns a keeper bounty (≤ 2% of the loan). Collateral is seized into the pool: the portion up to the bad debt restores the loss to all members; any excess beyond the bad debt is redirected to non-defaulting members via a targeted share burn on the defaulter, so the defaulter cannot share in their own forfeited collateral. Any shortfall (under-collateralized default) is socialized across all members.</li>
           <li><strong>OVERDUE badge</strong> — Shown in red when the repayment deadline has passed.</li>
         </ul>
       </div>
@@ -388,7 +388,7 @@
       <div class="card">
         <h3>History</h3>
         <p class="guide-desc">
-          Shows all fully completed loans — both repaid and defaulted. For defaulted loans the table shows how much collateral was seized to offset bad debt and the net shortfall socialized across members.
+          Shows all fully completed loans — both repaid and defaulted. For defaulted loans the table breaks down how much collateral was seized, how much covered the bad debt, how much excess flowed to non-defaulting members, and any socialized shortfall.
         </p>
       </div>
 
@@ -401,7 +401,7 @@
           <tbody>
             <tr><td>Has Defaulted</td><td>Whether this address has ever had a loan default triggered against them. A single default permanently disqualifies the Trust tier.</td></tr>
             <tr><td>Successful Repayments</td><td>Count of loans fully repaid. One is required for Trust tier eligibility (alongside 30-day membership).</td></tr>
-            <tr><td>Total Defaulted (ETH)</td><td>Cumulative bad debt that was socialized across the pool due to this borrower's defaults.</td></tr>
+            <tr><td>Total Defaulted (ETH)</td><td>Cumulative principal+interest the borrower walked away from across all of their defaults. Note: if collateral fully covered the bad debt, the pool was not actually socialized any loss — but the borrower is still flagged for the unpaid amount.</td></tr>
             <tr><td>Trust Tier Eligible</td><td>Green if the address has no prior default and either ≥ 1 successful repayment or ≥ 30 days of membership.</td></tr>
           </tbody>
         </table>

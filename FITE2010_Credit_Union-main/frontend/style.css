@@ -1,0 +1,405 @@
+/* ─── Reset & base ──────────────────────────────────────── */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --bg:        #0d1117;
+  --surface:   #161b22;
+  --border:    #30363d;
+  --text:      #e6edf3;
+  --muted:     #8b949e;
+  --green:     #2ea043;
+  --green-bg:  #0f2319;
+  --amber:     #d29922;
+  --amber-bg:  #2b1d00;
+  --red:       #f85149;
+  --red-bg:    #2d0f0e;
+  --blue:      #388bfd;
+  --mono:      'Courier New', 'Lucida Console', monospace;
+  --sans:      -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+  --radius:    6px;
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--sans);
+  font-size: 14px;
+  line-height: 1.6;
+  min-height: 100vh;
+}
+
+/* ─── Header ────────────────────────────────────────────── */
+header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 24px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  position: sticky;
+  top: 0;
+  z-index: 100;
+}
+
+.logo {
+  font-size: 18px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  color: var(--text);
+}
+
+.wallet-bar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+/* ─── Tabs ──────────────────────────────────────────────── */
+nav.tabs {
+  display: flex;
+  gap: 2px;
+  padding: 12px 24px 0;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  overflow-x: auto;
+}
+
+button.tab {
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 13px;
+  padding: 8px 14px;
+  transition: color 0.15s;
+  white-space: nowrap;
+}
+
+button.tab:hover { color: var(--text); }
+button.tab.active {
+  color: var(--text);
+  border-bottom-color: var(--blue);
+  font-weight: 600;
+}
+
+/* ─── Main ──────────────────────────────────────────────── */
+main { padding: 24px; max-width: 1100px; margin: 0 auto; }
+
+h2 { font-size: 18px; font-weight: 600; margin-bottom: 20px; }
+h3 { font-size: 15px; font-weight: 600; margin-bottom: 12px; }
+
+.tab-content { display: none; }
+.tab-content.active { display: block; }
+
+/* ─── Cards ─────────────────────────────────────────────── */
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 20px;
+  margin-bottom: 16px;
+}
+
+/* ─── Stats grid ─────────────────────────────────────────── */
+.stats-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: 12px;
+  margin-bottom: 20px;
+}
+
+.stat-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 16px;
+}
+
+.stat-label { font-size: 11px; text-transform: uppercase; letter-spacing: 0.8px; color: var(--muted); margin-bottom: 6px; }
+.stat-value { font-size: 18px; font-weight: 600; }
+
+/* ─── Forms ─────────────────────────────────────────────── */
+.form-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.form-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+label { font-size: 12px; color: var(--muted); display: flex; flex-direction: column; gap: 4px; }
+
+input[type="text"],
+input[type="number"] {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--text);
+  font-family: var(--sans);
+  font-size: 13px;
+  padding: 8px 10px;
+  width: 100%;
+  transition: border-color 0.15s;
+}
+
+input:focus { border-color: var(--blue); outline: none; }
+
+.hint { font-size: 11px; color: var(--muted); margin-top: 8px; }
+
+/* ─── Buttons ────────────────────────────────────────────── */
+button {
+  background: var(--blue);
+  border: none;
+  border-radius: var(--radius);
+  color: #fff;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 600;
+  padding: 8px 16px;
+  transition: opacity 0.15s;
+  white-space: nowrap;
+}
+
+button:hover  { opacity: 0.85; }
+button:active { opacity: 0.7; }
+button:disabled { opacity: 0.4; cursor: not-allowed; }
+
+button.btn-sm { padding: 5px 10px; font-size: 12px; }
+
+button.btn-green  { background: var(--green); }
+button.btn-red    { background: var(--red); }
+button.btn-amber  { background: var(--amber); color: #000; }
+button.btn-ghost  { background: transparent; border: 1px solid var(--border); color: var(--text); }
+
+#account-select,
+select {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--text);
+  font-size: 13px;
+  font-family: var(--sans);
+  padding: 8px 10px;
+  cursor: pointer;
+  width: 100%;
+  transition: border-color 0.15s;
+}
+
+#account-select {
+  font-family: var(--mono);
+  font-size: 12px;
+  padding: 4px 10px;
+  max-width: 260px;
+  width: auto;
+}
+
+select:focus { border-color: var(--blue); outline: none; }
+select:disabled { opacity: 0.4; cursor: not-allowed; }
+
+/* ─── Chips / badges ────────────────────────────────────── */
+.chip {
+  border-radius: 20px;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 3px 10px;
+  letter-spacing: 0.3px;
+}
+
+.chip-green  { background: var(--green-bg);  color: var(--green);  border: 1px solid var(--green); }
+.chip-amber  { background: var(--amber-bg);  color: var(--amber);  border: 1px solid var(--amber); }
+.chip-red    { background: var(--red-bg);    color: var(--red);    border: 1px solid var(--red); }
+
+
+/* Tier badges */
+.tier-badge { font-size: 11px; font-weight: 700; padding: 2px 8px; border-radius: 4px; }
+.tier-trust    { background: var(--green-bg); color: var(--green); border: 1px solid var(--green); }
+.tier-standard { background: var(--amber-bg); color: var(--amber); border: 1px solid var(--amber); }
+.tier-secured  { background: var(--red-bg);   color: var(--red);   border: 1px solid var(--red); }
+
+.tier-preview {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 0;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+/* ─── Tables ────────────────────────────────────────────── */
+.data-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.data-table th {
+  text-align: left;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.7px;
+  color: var(--muted);
+  border-bottom: 1px solid var(--border);
+  padding: 8px 10px;
+}
+
+.data-table td {
+  border-bottom: 1px solid var(--border);
+  padding: 10px;
+  vertical-align: middle;
+}
+
+.data-table tr:last-child td { border-bottom: none; }
+.data-table tr:hover td { background: rgba(255,255,255,0.02); }
+
+/* ─── Progress bar ───────────────────────────────────────── */
+.progress-bar {
+  background: var(--border);
+  border-radius: 4px;
+  height: 6px;
+  overflow: hidden;
+  width: 100%;
+  min-width: 80px;
+}
+
+.progress-bar-fill {
+  background: var(--green);
+  height: 100%;
+  transition: width 0.3s;
+}
+
+/* ─── Loan cards ────────────────────────────────────────── */
+.loan-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 16px 20px;
+  margin-bottom: 12px;
+}
+
+.loan-card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 12px;
+}
+
+.loan-card-meta {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.meta-item { font-size: 12px; color: var(--muted); }
+.meta-item strong { color: var(--text); font-family: var(--mono); display: block; }
+
+.loan-card-actions { display: flex; gap: 8px; align-items: center; }
+
+
+
+/* ─── Utilities ──────────────────────────────────────────── */
+.mono { font-family: var(--mono); }
+.hidden { display: none !important; }
+.empty-msg { color: var(--muted); font-size: 13px; padding: 20px 0; }
+.truncate { max-width: 120px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: inline-block; }
+
+/* ─── Profile grid ───────────────────────────────────────── */
+.profile-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 16px;
+}
+
+/* ─── Toast ──────────────────────────────────────────────── */
+.toast {
+  position: fixed;
+  bottom: 24px;
+  right: 24px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--text);
+  font-size: 13px;
+  max-width: 400px;
+  padding: 12px 16px;
+  z-index: 999;
+  animation: slide-in 0.2s ease;
+}
+
+.toast.error   { border-color: var(--red);   background: var(--red-bg); }
+.toast.success { border-color: var(--green); background: var(--green-bg); }
+
+@keyframes slide-in {
+  from { transform: translateY(20px); opacity: 0; }
+  to   { transform: translateY(0);    opacity: 1; }
+}
+
+/* ─── Guide ──────────────────────────────────────────────── */
+.guide-desc {
+  font-size: 13px;
+  color: var(--muted);
+  line-height: 1.7;
+  margin-bottom: 10px;
+}
+
+.guide-list {
+  font-size: 13px;
+  color: var(--muted);
+  line-height: 1.8;
+  padding-left: 20px;
+  margin-bottom: 8px;
+}
+
+.guide-list li { margin-bottom: 4px; }
+.guide-list strong, .guide-desc strong { color: var(--text); }
+.guide-list code, .guide-desc code {
+  font-family: var(--mono);
+  font-size: 12px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  padding: 1px 5px;
+}
+
+.guide-step {
+  display: flex;
+  gap: 14px;
+  align-items: flex-start;
+  margin-bottom: 12px;
+  font-size: 13px;
+  color: var(--muted);
+  line-height: 1.7;
+}
+
+.guide-step-num {
+  flex-shrink: 0;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: var(--blue);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-top: 2px;
+}
+
+.guide-step strong { color: var(--text); }
+
+/* ─── Wallet address ─────────────────────────────────────── */
+#wallet-addr {
+  font-size: 12px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 4px 10px;
+  color: var(--muted);
+}

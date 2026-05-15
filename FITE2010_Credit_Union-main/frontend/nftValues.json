@@ -1,0 +1,12 @@
+[
+  { "id": "NFT-001", "name": "Pixel Ape #1", "valueEth": 2.5 },
+  { "id": "NFT-002", "name": "Cyberpunk Avatar", "valueEth": 1.8 },
+  { "id": "NFT-003", "name": "Alien Ape #42", "valueEth": 3.2 },
+  { "id": "NFT-004", "name": "Neon Rhino", "valueEth": 0.9 },
+  { "id": "NFT-005", "name": "Onchain Cat", "valueEth": 4.4 },
+  { "id": "NFT-006", "name": "Moon Rock Pass", "valueEth": 1.1 },
+  { "id": "NFT-007", "name": "Golden Hoodie", "valueEth": 5.0 },
+  { "id": "NFT-008", "name": "Voxel Ghost", "valueEth": 0.5 },
+  { "id": "NFT-009", "name": "Circuit Mask", "valueEth": 2.2 },
+  { "id": "NFT-010", "name": "Dragon Key", "valueEth": 3.8 }
+]

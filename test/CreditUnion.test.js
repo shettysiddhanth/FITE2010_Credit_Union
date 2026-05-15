@@ -235,6 +235,21 @@ describe("CreditUnion", function () {
       const wb = await cu.computeVotingWeight(bob.address);
       expect(wb).to.be.gt(wa);
     });
+
+    it("getTotalVotingWeight equals the sum of individual member weights", async function () {
+      const { cu, alice, bob, carol } = await deploy();
+      await joinAndWait(cu, alice, E(2));
+      await joinAndWait(cu, bob,   E(10));
+      // carol joins without tenure → her weight must be 0
+      await cu.connect(carol).join({ value: E(3) });
+
+      const wa = await cu.computeVotingWeight(alice.address);
+      const wb = await cu.computeVotingWeight(bob.address);
+      const wc = await cu.computeVotingWeight(carol.address);
+      expect(wc).to.equal(0n);
+
+      expect(await cu.getTotalVotingWeight()).to.equal(wa + wb + wc);
+    });
   });
 
   // ── 6. requestLoan() — tier classification ────────────────────
@@ -380,6 +395,24 @@ describe("CreditUnion", function () {
       const [threshRate,] = await cu.computeThresholds(alice.address, E(0.5), 7 * ONE_DAY);
       await expect(cu.connect(alice).requestLoan(E(0.5), threshRate - 1n, 7 * ONE_DAY, E(1)))
         .to.be.revertedWith("Rate below risk threshold");
+    });
+
+    it("reverts with 'No eligible voting weight' when borrower is the only weight-bearer", async function () {
+      const { cu, alice, bob } = await deploy();
+      // alice has tenure → non-zero weight. bob just joined → zero weight.
+      // Borrower's own weight is excluded from the denominator, so the eligible
+      // weight collapses to zero.
+      await joinAndWait(cu, alice, E(5));
+      await cu.connect(bob).join({ value: E(15) });
+
+      const principal = E(1);
+      const duration  = 7 * ONE_DAY;
+      const [threshRate, threshCollat] =
+        await cu.computeThresholds(alice.address, principal, duration);
+
+      await expect(
+        cu.connect(alice).requestLoan(principal, threshRate, duration, threshCollat * 110n / 100n)
+      ).to.be.revertedWith("No eligible voting weight");
     });
   });
 
@@ -776,6 +809,71 @@ describe("CreditUnion", function () {
       expect(profile._hasDefaulted).to.be.true;
       // totalDefaulted records grossBadDebt (principal + interest, before collateral offset)
       expect(profile._totalDefaulted).to.equal(loan.totalDue);
+    });
+
+    it("over-collateralized default redirects excess to non-defaulters via targeted share burn", async function () {
+      const { cu, alice, bob, keeper } = await deploy();
+      await joinAndWait(cu, alice, E(5));
+      await joinAndWait(cu, bob, E(15));
+
+      // 1 ETH loan, 2 ETH collateral (≫ grossBadDebt ≈ 1.0017 ETH).
+      // Bypass openLoan so we can pin collateralOffered to a punitive 2 ETH.
+      const principal = E(1);
+      const duration  = 7 * ONE_DAY;
+      const [threshRate, threshCollat] =
+        await cu.computeThresholds(alice.address, principal, duration);
+      const collateralOffered = E(2);
+      expect(collateralOffered).to.be.gt(threshCollat);
+
+      await cu.connect(alice).requestLoan(principal, threshRate, duration, collateralOffered);
+      const reqId = await cu.loanCounter();
+      await cu.connect(bob).vote(reqId, true);
+      await time.increase(3 * ONE_DAY + 1);
+      await cu.finalizeLoan(reqId);
+      await cu.connect(alice).activateLoan(reqId, { value: collateralOffered });
+
+      const aliceSharesBefore = (await cu.members(alice.address)).shares;
+      const bobSharesBefore   = (await cu.members(bob.address)).shares;
+      const bobValueBefore    = await cu.getMemberValue(bob.address);
+      const totalSharesBefore = await cu.totalShares();
+      const poolBefore        = await cu.totalPoolETH();
+      const totalDue          = (await cu.getActiveLoan(reqId)).totalDue;
+
+      await time.increase(8 * ONE_DAY);
+      const tx = await cu.connect(keeper).triggerDefault(reqId);
+      const rc = await tx.wait();
+      const bounty = rc.logs.find((l) => l.fragment?.name === "DefaultTriggered").args[2];
+
+      const lossCover = collateralOffered > totalDue ? totalDue : collateralOffered;
+      const excess    = collateralOffered > totalDue ? collateralOffered - totalDue : 0n;
+      expect(excess).to.be.gt(0n);   // sanity: the new code path is exercised
+
+      const aliceSharesAfter = (await cu.members(alice.address)).shares;
+      const bobSharesAfter   = (await cu.members(bob.address)).shares;
+      const bobValueAfter    = await cu.getMemberValue(bob.address);
+      const totalSharesAfter = await cu.totalShares();
+
+      // (a) Defaulter's shares were burned; non-defaulter's were not.
+      const sharesBurned = aliceSharesBefore - aliceSharesAfter;
+      expect(sharesBurned).to.be.gt(0n);
+      expect(bobSharesAfter).to.equal(bobSharesBefore);
+      expect(totalSharesAfter).to.equal(totalSharesBefore - sharesBurned);
+
+      // (b) Non-defaulter's pool value grew — they captured the redirected excess
+      //     (plus their share of the lossCover, minus their tiny share of the bounty).
+      expect(bobValueAfter).to.be.gt(bobValueBefore);
+
+      // (c) Flat-through-excess invariant on the defaulter:
+      //     aliceShares_before × P_postLoss / S_before ==
+      //     aliceShares_after  × P_postExcess / S_after
+      //     where P_postLoss = poolBefore + lossCover (pool before excess add)
+      //     and   P_postExcess = poolFinal + bounty  (pool after excess add, before bounty deduct)
+      const poolFinal     = await cu.totalPoolETH();
+      const P_postLoss    = poolBefore + lossCover;
+      const P_postExcess  = poolFinal + bounty;
+      const lhs = (aliceSharesBefore * P_postLoss)   / totalSharesBefore;
+      const rhs = (aliceSharesAfter  * P_postExcess) / totalSharesAfter;
+      expect(lhs).to.be.closeTo(rhs, 10n);   // tolerance: integer-division rounding only
     });
   });
 

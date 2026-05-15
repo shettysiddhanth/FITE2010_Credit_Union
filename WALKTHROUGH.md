@@ -272,13 +272,13 @@ creditUnion.connect(acct3).triggerDefault(1);
 
 | Account | Shares | Total share fraction | Member value (= shares × 2148.99 / 1870.29) | Change vs pre-loan |
 |---|---|---|---|---|
-| acct0 (defaulter) | 870.29 | 46.5% | **1,000.00** | 0 (held flat by design) |
-| acct1 | 500 | 26.7% | **574.50** | **+74.50** |
-| acct2 | 500 | 26.7% | **574.50** | **+74.50** |
+| acct0 (defaulter) | 870.29 | 46.5% | **≈ 1,000.44** | **+0.44** (their 50% share of the recovered interest) |
+| acct1 | 500 | 26.7% | **≈ 574.72** | **+74.72** |
+| acct2 | 500 | 26.7% | **≈ 574.72** | **+74.72** |
 
-**The defaulter's pool value is exactly back to where it started.** They neither benefited nor lost from the seizure of *their own* collateral via their pool stake.
+**The defaulter's pool value is held flat through the *excess* addition** — that's what the share burn is calibrated for. They end up at the post-lossCover value (≈ pre-loan + their share of the recovered interest), not at zero change from pre-loan. That tiny uplift is structurally identical to what would happen on a normal repayment: when a borrower-member repays interest, that interest is distributed to all members through share appreciation, and the borrower captures their own ownership-fraction back. The default flow mirrors this — the interest portion of `lossCover` is the same dividend whether it came from a wallet repayment or from collateral.
 
-**The non-defaulters captured the entire excess** — 74.50 each = 149 total, exactly the excess that came in. (Tiny rounding from integer division.)
+**The non-defaulters captured the entire excess plus their share of the interest** — ~74.72 each ≈ 149.44 total = 149.116 excess + 0.328 (their combined 50% of the 0.884 interest, since the other half went to the defaulter's shares). (Tiny rounding from integer division.)
 
 ### acct0's total economic outcome
 
@@ -286,14 +286,14 @@ creditUnion.connect(acct3).triggerDefault(1);
 |---|---|
 | Wallet: paid 250 collateral | −250 |
 | Wallet: received 100 loan principal | +100 |
-| Pool share value | 1,000 → 1,000 (flat) |
-| **Total loss to defaulter** | **−150 ETH** |
+| Pool share value | 1,000 → ≈ 1,000.44 (their share of the interest dividend) |
+| **Total loss to defaulter** | **≈ −149.56 ETH** |
 
-The 150 ETH is exactly the over-collateralization premium they posted as a forfeiture bond. They paid the punitive premium and that premium went to honest members — not back to themselves.
+That ≈ 149.56 is essentially the 150 over-collateralization premium they posted as a forfeiture bond, minus the small interest dividend they captured on their remaining shares (same dividend any borrower-member captures from interest they themselves pay). The bulk of the premium went to honest members — not back to themselves.
 
 ### acct1 and acct2's outcome
 
-Each was −25 during the active loan, then +74.50 at default. Net **+49.50** each — they took on real risk (a member was about to walk) and got paid for it.
+Each was −25 during the active loan, then +74.72 at default. Net **≈ +49.72** each — they took on real risk (a member was about to walk) and got paid the over-collateralization premium plus their share of the interest as compensation.
 
 ---
 
@@ -335,7 +335,7 @@ The share burn mechanism is *only* triggered when collateral genuinely over-secu
 
 ## Summary of the invariants this design enforces
 
-1. **The defaulter never benefits from their own forfeited collateral** — the share burn is exactly calibrated so their pool value passes through `triggerDefault` unchanged when there's excess collateral.
-2. **The bad-debt cover is shared by all** — this is not a punishment, it's just undoing the loan loss, so all members (including the defaulter, on their remaining shares) participate.
+1. **The defaulter never benefits from the *excess* portion of their forfeited collateral** — the share burn is exactly calibrated so their pool value is held flat across the excess addition. They do still receive their pro-rata share of the bad-debt cover (which includes the unpaid principal *and* unpaid interest) — this is consistent with how a normal repayment behaves, where the borrower-member captures their own ownership-fraction of any interest they pay back via share appreciation.
+2. **The bad-debt cover is shared by all** — this is not a punishment, it's just undoing the loan loss (principal portion) plus crediting the interest that the borrower nominally owed. All members (including the defaulter, on their remaining shares) participate.
 3. **The punitive premium flows to honest members** — non-defaulters' shares appreciate by the full excess amount, distributed pro-rata to their pre-default ownership of the non-defaulter slice.
 4. **ETH is conserved** — every wei moves from one place to another (defaulter wallet → pool, pool → keeper, etc.). The contract never mints or destroys ETH; only redistributes it.

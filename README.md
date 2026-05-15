@@ -38,7 +38,7 @@ Both components use integer approximations:
 - **log2**: O(1) unrolled MSB bit-length lookup; no loops.
 - New members (<30 days) have `months=0`, so `log2(1)=0` → weight zero. This prevents flash-deposit governance attacks.
 
-Approval requires `votesFor > 50%` of the **total voting weight snapshot** taken at request time. Abstentions count against (the snapshot includes all members, not just those who voted).
+Approval thresholds are dynamic and depend on loan duration: ≤30 days requires 50%, 31–90 days requires 55%, >90 days requires 60% of the total voting weight. Offering ≥130% of the threshold rate or threshold collateral each reduces the required majority by 10% (combined floor 35%). Voting weights are **recomputed at finalization** from each voter's current deposit and tenure — not snapshotted at cast time — so a member who tops up or withdraws between casting and finalization sees their vote weight change accordingly. Abstentions count against (the total includes all members, not just those who voted).
 
 ### Loan Tiers & Collateral
 
@@ -121,8 +121,8 @@ No MetaMask or browser wallet required. The frontend connects directly to the Ha
 ### 1. Start the development environment
 
 ```bash
-git clone https://github.com/shettysiddhanth/FITE2010_Credit_Union.git
-cd FITE2010_Credit_Union-main
+git clone https://github.com/uddashya/Credit_union.git
+cd Credit_union
 docker compose run --service-ports hardhat bash
 ```
 
@@ -245,7 +245,7 @@ Output: **77 tests, all passing**. Test coverage includes:
 
 | Function | Description |
 |----------|-------------|
-| `requestLoan(amount, interestRate, duration)` | Submit a loan request; tier and collateral auto-determined |
+| `requestLoan(amount, interestRate, duration, collateralOffered)` | Submit a loan request with a collateral commitment; tier and min thresholds auto-determined |
 | `vote(requestId, support)` | Cast a weighted vote on a pending loan request |
 | `finalizeLoan(requestId)` | Finalize after 3-day voting window; sets Approved or Rejected |
 | `activateLoan(requestId)` | Borrower locks collateral and receives principal (≤7 days after approval) |
@@ -279,7 +279,9 @@ Output: **77 tests, all passing**. Test coverage includes:
 | `getActiveLoan(id)` | Full `ActiveLoan` struct |
 | `computeVotingWeight(address)` | Member's current voting weight |
 | `determineTier(amount, duration)` | `LoanTier` enum for given params |
-| `collateralRequiredFor(amount, tier)` | Collateral amount in wei |
+| `computeThresholds(borrower, amount, duration)` | `(thresholdRate, thresholdCollateral)` — dynamic min rate and collateral for the loan |
+| `getLiveVoteTotals(requestId)` | `(currentTotalWeight, currentVotesFor, currentVotesAgainst)` using each voter's live weight |
+| `getLiveGovVoteTotals(proposalId)` | Same as above for governance proposals |
 | `getBorrowerProfile(address)` | `(hasDefaulted, successfulRepayments, totalDefaulted)` |
 
 ---

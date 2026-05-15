@@ -13,7 +13,7 @@ A production-grade decentralized credit union implemented as a single Solidity s
 | **Member** | Deposit ETH, earn yield, vote on loan requests, borrow |
 | **Borrower** | A member with an active loan — must repay or face default |
 | **Guarantor** | A member who explicitly approves backing another member's under-100% ETH loan; their available share value is locked until repayment or default |
-| **Treasurer** | Single address set at deployment; can emergency-pause the contract and propose parameter changes. All proposals require a member vote and a 2-day timelock before taking effect. The treasurer role itself can be transferred via a governance vote. |
+| **Treasurer** | Single address set at deployment; can emergency-pause the contract and propose parameter changes. All proposals require a member vote — approved by a **strict simple majority (>50%) of the total current voting weight** with no borrower exclusion and no duration-based escalation — and a 2-day timelock before taking effect. The treasurer role itself can be transferred via a governance vote. |
 | **Keeper** | Anyone who calls `triggerDefault()` on an overdue loan; earns a bounty (≤2% of loan) |
 
 ### Share Accounting
@@ -41,6 +41,8 @@ Both components use integer approximations:
 - **sqrt**: Babylonian method applied directly to the wei value. At the minimum deposit of 0.01 ETH (= 1×10¹⁶ wei), `sqrt = 10⁸` — always non-zero.
 - **log2**: O(1) unrolled MSB bit-length lookup; no loops.
 - New members (<30 days) have `months=0`, so `log2(1)=0` → weight zero. This prevents flash-deposit governance attacks.
+
+> **Note on `depositAmount`:** the `depositAmount` field used in the `sqrt` term is set to `msg.value` at `join()` and is only recalculated to reflect current pool value when a member calls `addDeposit()` or `withdraw()`. Between those calls it retains the historical cost basis and does **not** automatically track pool appreciation from interest income. Members who top up or partially withdraw will see their weight reflect current pool value; dormant members retain weight based on their original deposit.
 
 Approval thresholds are dynamic and depend on loan duration: ≤30 days requires 50%, 31–90 days requires 55%, >90 days requires 60% of the **eligible** voting weight. Offering ≥130% of the threshold rate or threshold collateral each reduces the required majority by 10% (combined floor 35%). Voting weights are **recomputed at finalization** from each voter's current deposit and tenure — not snapshotted at cast time — so a member who tops up or withdraws between casting and finalization sees their vote weight change accordingly. The borrower is **excluded from the denominator** (they can't vote on their own loan, so counting their weight would be a forced "no" against themselves). Abstentions by *other* members still count against — the denominator is every eligible voter, not just those who cast.
 
@@ -88,7 +90,7 @@ thresholdRate = minInterestRate + sizeRiskPremium + durationRiskPremium
 | 31–90 days | 55% of total weight | Medium-term |
 | > 90 days | 60% of total weight | Long-term, higher scrutiny |
 
-Each boost dimension (generous rate OR generous collateral) subtracts 10% from the required threshold, with a floor of 35%. Example: a 90-day loan at 130% of threshold rate qualifies for 45% threshold, floored to 35%.
+Each boost dimension (generous rate OR generous collateral) subtracts 10% from the required threshold, with a floor of 35%. Example: a 90-day loan at 130% of threshold rate starts at 55%, drops to **45%** after the rate boost — above the 35% floor, so the floor does not apply. A 90-day loan with *both* boosts would drop to 35% (55% − 10% − 10% = 35%), which equals the floor exactly.
 
 ### Loan Lifecycle
 
@@ -103,17 +105,18 @@ requestLoan() → [3-day vote window] → finalizeLoan()
 
 ### One Active Loan Per Member
 
-A member can hold **at most one active loan at a time**. This is enforced by `activeLoanIdOf[member]` — a per-address pointer that's set to the loan ID at `activateLoan`, cleared to `0` on full repayment or default, and checked at every borrowing-relevant entry point.
+A member can hold **at most one loan in flight at a time** — no pending, no active. This is enforced by two per-address pointers:
 
-| Action | What's blocked while you have an active loan |
+- `pendingLoanIdOf[member]` — set when a request is submitted, cleared when `finalizeLoan` runs (approved or rejected).
+- `activeLoanIdOf[member]` — set at `activateLoan`, cleared on full repayment or default.
+
+| Action | What's blocked |
 |---|---|
-| `requestLoan` | Reverts with `"Active loan outstanding"` — you can't even submit a second request |
+| `requestLoan` | Reverts with `"Pending loan exists"` if you already have a pending/approved request, or `"Active loan outstanding"` if you already have an active loan |
 | `withdraw` | Reverts while borrowing; guarantors can withdraw only value not locked behind active guarantees |
 | `repay` | Allowed (this is how you close out) |
 
-Sequential borrowing is fine — repay your current loan and you can immediately request a new one with no cooldown. But **stacking** is impossible: no portfolio borrowing, no concurrent loans across tiers, no single member holding multiple outstanding obligations. Each member has one open exposure to the pool at a time, and the risk model (tier classification, threshold collateral, voting weight) assumes that single-loan view throughout.
-
-A pending request that hasn't been activated yet does *not* block a new request — the gate is on `Active` status specifically. But once you activate, the lock is in place until the loan resolves.
+Sequential borrowing is fine — repay your current loan and you can immediately request a new one with no cooldown. But **stacking is impossible at every stage**: you cannot hold two pending requests, cannot activate while pending, and cannot request while active. Each member has one open exposure to the pool at a time, and the risk model (tier classification, threshold collateral, voting weight) assumes that single-loan view throughout.
 
 ### Reserve Requirement
 
@@ -242,7 +245,7 @@ A **Dev Tools** panel lets you advance the local chain clock without leaving the
 npx hardhat test
 ```
 
-Output: **89 tests, all passing**. Test coverage includes:
+Output: **95 tests, all passing**. Test coverage includes:
 
 - Deployment & configuration
 - Membership (join, addDeposit, withdraw)

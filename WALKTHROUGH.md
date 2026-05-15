@@ -164,7 +164,7 @@ acct1 had a profitable 28 days, generated revenue, and now repays before the dea
 creditUnion.connect(acct1).repay(1, { value: 100.884 ether });
 ```
 
-### What `repay` does on full repayment ([CreditUnion.sol:605-633](contracts/CreditUnion.sol#L605-L633))
+### What `repay` does on full repayment ([CreditUnion.sol:724-759](contracts/CreditUnion.sol#L724-L759))
 
 1. **Adds the payment to the pool** — `totalPoolETH += 100.884` → pool grows to **2,000.884**.
 2. **Returns the collateral** — `collateralHeld[1] = 0`, sends 40 ETH back to acct1.
@@ -445,28 +445,30 @@ acct3 wallet: 10,000 → 10,001.01
 
 ### Member values after default
 
-| Account | Shares | Member value | Net change |
+Values below are computed at the post-Phase-2, **pre-bounty** pool (2,150 ETH) to demonstrate the share-burn invariant cleanly. The keeper bounty (1.009 ETH) is then deducted proportionally from all members at final settlement.
+
+| Account | Shares | Member value (pre-bounty pool = 2,150) | Net change |
 |---|---|---|---|
-| acct0 (defaulter) | 870.29 | 870.29 × 2,148.991 / 1,870.29 = **≈ 1,000.44** | **+0.44** (just the interest dividend) |
-| acct1 | 500 | 500 × 2,148.991 / 1,870.29 = **≈ 574.72** | **+74.72** |
-| acct2 | 500 | 500 × 2,148.991 / 1,870.29 = **≈ 574.72** | **+74.72** |
+| acct0 (defaulter) | 870.29 | 870.29 × 2,150 / 1,870.29 = **≈ 1,000.44** | **+0.44** (just the interest dividend) |
+| acct1 | 500 | 500 × 2,150 / 1,870.29 = **≈ 574.78** | **+74.78** |
+| acct2 | 500 | 500 × 2,150 / 1,870.29 = **≈ 574.78** | **+74.78** |
 
 ### Economic outcomes (Case 3)
 
 | Party | Net change vs pre-loan |
 |---|---|
 | **acct0** (defaulter) | wallet −150 (over-collateralization paid at activation); pool +0.44; **≈ −149.56 ETH total** |
-| **acct1** | pool +74.72 (was −25 during loan, recovered then captured excess) |
-| **acct2** | pool +74.72 (same) |
+| **acct1** | pool +74.78 (was −25 during loan, recovered then captured excess) |
+| **acct2** | pool +74.78 (same) |
 | **acct3** (keeper) | wallet +1.01 |
 
-acct0's loss is essentially the 150 over-collateralization premium they posted. The share-burn math made sure that 150 went **to honest members** instead of back to themselves through their own pool stake. Compare to Case 2 where the defaulter went *up* 44.75 — here the over-collateralization plus the share-burn redistribution flips the math decisively in the pool's favor.
+acct0's loss is essentially the 150 over-collateralization premium they posted. The share-burn math made sure that 150 went **to honest members** instead of back to themselves through their own pool stake. Compare to Case 2 where the defaulter went *up* 60.22 (even more under the guarantor-backed scenario; 44.75 in the no-guarantor counterfactual) — here the over-collateralization plus the share-burn redistribution flips the math decisively in the pool's favor.
 
 ---
 
 # Side-by-Side Summary
 
-|  | Case 1 (repaid) | Case 2 (under/just-met-threshold default) | Case 3 (over-collateralized default) |
+|  | Case 1 (repaid) | Case 2 (just-met-threshold, guarantor-backed, defaulted) | Case 3 (over-collateralized default) |
 |---|---|---|---|
 | Borrower | acct1 (25% stake) | acct1 (25% stake) | acct0 (50% stake) |
 | Principal | 100 | 100 | 100 |
@@ -477,18 +479,18 @@ acct0's loss is essentially the 150 over-collateralization premium they posted. 
 | Borrower cash flow at activation | **+60** | **+60** | **−150** |
 | Outcome | Repaid in full | Defaulted | Defaulted |
 | Share burn fires? | n/a | **No** (excess = 0) | **Yes** (excess ≈ 149) |
-| Pool change vs pre-loan | +0.884 | **−61.01** (socialized loss) | +148.99 (excess captured) |
-| Borrower's total economic outcome | **−0.66** (interest, net of dividend) | **+44.75 ⚠️** (profitable default) | **−149.56** (premium forfeited) |
-| acct0's pool change | +0.442 | **−30.50** | +0.44 (defaulter) |
-| acct1's pool change | +0.221 (defaulter, see borrower row) | **−15.25** (defaulter, see borrower row) | +74.72 |
-| acct2's pool change | +0.221 | **−15.25** | +74.72 |
+| Pool change vs pre-loan | +0.884 | **−61.01** (guarantor-absorbed) | +148.99 (excess captured) |
+| Borrower's total economic outcome | **−0.66** (interest, net of dividend) | **+60.22 ⚠️** (profitable default) | **−149.56** (premium forfeited) |
+| acct0's pool change | +0.442 | **−61.45** (guarantor seizure) | +0.44 (defaulter) |
+| acct1's pool change | +0.221 (defaulter, see borrower row) | **+0.22** (defaulter, see borrower row) | +74.78 |
+| acct2's pool change | +0.221 | **+0.22** | +74.78 |
 | `hasDefaulted[borrower]` | false | true (permanent) | true (permanent) |
 | `successfulRepayments[borrower]` | +1 | unchanged | unchanged |
 
 ## Key takeaways
 
 **Case 1 vs Case 2 (same loan terms, different outcomes):**
-If everyone repays, everyone wins (small but positive). If a borrower defaults at minimum threshold collateral, the borrower walks away with +44.75 and the honest pool members eat the loss collectively. **The thin collateral threshold isn't a deterrent on its own — voting and reputation have to do the work.**
+If everyone repays, everyone wins (small but positive). If a borrower defaults at minimum threshold collateral with a guarantor backing the shortfall, the borrower walks away with +60.22 while the guarantor absorbs −61.45 — the passive pool members (acct2) are nearly flat (+0.22). Without the guarantor the full 61.01 ETH loss would have been socialized proportionally (acct0 −30.50, acct2 −15.25, borrower −15.25 + wallet +60 = +44.75 net). **The guarantor mechanic shifts concentrated risk from passive pool members to a consenting co-signer, but the thin collateral threshold still cannot make default unprofitable for the borrower on its own — voting and reputation have to do the work.**
 
 **Case 2 vs Case 3 (both defaults, different collateral):**
 The share-burn mechanic only fires when collateral *exceeds* bad debt. Below that threshold, default is profitable for the borrower; above it, default is heavily punitive. The contract's collateral baselines (15% / 40% / 75% by tier) are *under* the level that would make default mathematically unprofitable on its own — Trust at 15% leaves the largest gap, Secured at 75% the smallest.

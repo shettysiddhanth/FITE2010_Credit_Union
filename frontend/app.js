@@ -11,6 +11,16 @@ let hardhatAccounts = [];
 let nftValues = [];
 let selectedNFT = null;
 
+// Escape HTML special chars before inserting untrusted strings into innerHTML.
+function escHtml(s) {
+  return String(s)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
 // LoanStatus / LoanTier mirrors from Solidity enum
 const STATUS = { Pending: 0, Approved: 1, Rejected: 2, Active: 3, Repaid: 4, Defaulted: 5 };
 const STATUS_LABEL    = ["Pending", "Approved", "Rejected", "Active", "Repaid", "Defaulted"];
@@ -265,13 +275,11 @@ async function renderOverview() {
       toast("Contract is paused — deposits and new loan requests are disabled.", "error");
     }
 
-    setupOverviewActions(memberData, paused, pool);
+    setupOverviewActions(memberData, paused);
   } catch (e) { toast(parseError(e), "error"); }
 }
 
-function setupOverviewActions(memberData, paused, pool) {
-  // pool[0] = totalPoolETH, pool[1] = totalShares
-
+function setupOverviewActions(memberData, paused) {
   // Deposit
   const btnDeposit = document.getElementById("btn-deposit");
   btnDeposit.onclick = async () => {
@@ -285,6 +293,7 @@ function setupOverviewActions(memberData, paused, pool) {
 
   // Withdraw: input is in ETH; shares are wei-scale (1 ETH ≈ 10^18 shares
   // for the first depositor) so we derive shareAmount from the ETH value.
+  // Pool ratio is fetched fresh at click time to avoid stale-snapshot errors.
   const withdrawInput = document.getElementById("withdraw-eth");
   withdrawInput.placeholder = "ETH amount";
   const btnWithdraw = document.getElementById("btn-withdraw");
@@ -293,8 +302,9 @@ function setupOverviewActions(memberData, paused, pool) {
     if (!ethInput) return;
     let shareAmount;
     try {
-      const totalPoolETH = pool[0];
-      const totalShares  = pool[1];
+      const freshPool    = await contract.getPool();
+      const totalPoolETH = freshPool[0];
+      const totalShares  = freshPool[1];
       if (totalPoolETH === 0n || totalShares === 0n) {
         toast("Pool is empty.", "error");
         return;
@@ -302,7 +312,8 @@ function setupOverviewActions(memberData, paused, pool) {
       const ethWei  = ethers.parseEther(ethInput);
       shareAmount   = (ethWei * totalShares) / totalPoolETH;
       if (shareAmount === 0n) { toast("Amount too small.", "error"); return; }
-      if (shareAmount > memberData.shares) shareAmount = memberData.shares;
+      const freshMember = await contract.members(signerAddress);
+      if (shareAmount > freshMember.shares) shareAmount = freshMember.shares;
     } catch {
       toast("Invalid ETH amount.", "error");
       return;
@@ -376,15 +387,15 @@ function setupRequestForm() {
 
   const updatePreview = async () => {
     try {
-      const amt = parseFloat(amtEl.value);
+      const amtStr = amtEl.value.trim();
       const dur = parseInt(durEl.value);
-      if (!amt || !dur) {
+      if (!amtStr || !dur) {
         preview.classList.add("hidden");
         nftPreview.classList.add("hidden");
         guarantorField.classList.add("hidden");
         return;
       }
-      const amtWei  = ethers.parseEther(String(amt));
+      const amtWei  = ethers.parseEther(amtStr);
       const durSecs = BigInt(dur * 86400);
       const tier    = Number(await contract.determineTier(amtWei, durSecs));
       const [threshRate, threshCollat] = await contract.computeThresholds(signerAddress, amtWei, durSecs);
@@ -458,7 +469,7 @@ function setupRequestForm() {
   amtEl.oninput    = updatePreview;
   durEl.oninput    = updatePreview;
   ratEl.oninput    = updatePreview;
-  typeEl.oninput    = () => {
+  typeEl.onchange   = () => {
     delete collatEl.dataset.userEdited;
     updatePreview();
   };
@@ -468,11 +479,11 @@ function setupRequestForm() {
   };
 
   document.getElementById("btn-request-loan").onclick = async (e) => {
-    const amt  = amtEl.value;
+    const amt  = amtEl.value.trim();
     const rate = ratEl.value;
     const dur  = durEl.value;
     if (!amt || !rate || !dur) return;
-    await txAction(e.target, () => {
+    await txAction(e.target, async () => {
       const rateBps  = BigInt(Math.round(parseFloat(rate) * 100));
       const durSecs  = BigInt(parseInt(dur)) * 86400n;
       const amtWei = ethers.parseEther(amt);
@@ -490,6 +501,13 @@ function setupRequestForm() {
         : ethers.ZeroAddress;
       if (collateralType === COLLATERAL_TYPE.NFT && !selectedNFT) {
         throw new Error("Select an NFT in Dev Tools first.");
+      }
+      // Pre-validate ETH collateral meets threshold to give a clear error before the tx.
+      if (collateralType === COLLATERAL_TYPE.ETH) {
+        const [, threshCollat] = await contract.computeThresholds(signerAddress, amtWei, durSecs);
+        if (collatWei < threshCollat) {
+          throw new Error(`Collateral too low — need at least ${ethers.formatEther(threshCollat)} ETH.`);
+        }
       }
       return contract.requestLoan(
         amtWei,
@@ -582,7 +600,7 @@ async function buildRequestCard(req, memberData, chainNow) {
       <div class="meta-item">Collateral Type<strong>${COLLATERAL_LABEL[collateralType]}</strong></div>
       <div class="meta-item">Collateral Offered<strong>${
         collateralType === COLLATERAL_TYPE.NFT
-          ? `${collateralInfo.nftId} (${formatEth(collateralInfo.collateralEthValue)} ETH)`
+          ? `${escHtml(collateralInfo.nftId)} (${formatEth(collateralInfo.collateralEthValue)} ETH)`
           : `${formatEth(req.collateralOffered)} ETH`
       }</strong></div>
       <div class="meta-item">Guarantor<strong>${
@@ -647,11 +665,9 @@ async function buildRequestCard(req, memberData, chainNow) {
         if (Number(info.collateralType) === COLLATERAL_TYPE.NFT) {
           return contract.activateLoan(req.id, { value: 0 });
         }
-        // Re-evaluate tier at activation time — pool may have changed since requestLoan,
-        // potentially escalating the required collateral. Only escalate, never de-escalate.
-        // The contract requires max(collateralOffered, currentThreshCollat).
-        const activeTierNum = Number(await contract.determineTier(req.amount, req.duration));
-        const activeTier    = activeTierNum > Number(req.tier) ? activeTierNum : Number(req.tier);
+        // The contract requires max(collateralOffered, currentThreshCollat) and
+        // enforces only-escalate at its own tier-check. Mirror that here so the
+        // sent value matches exactly what the contract will require.
         const [, currentThreshCollat] = await contract.computeThresholds(req.borrower, req.amount, req.duration);
         const collat = req.collateralOffered > currentThreshCollat ? req.collateralOffered : currentThreshCollat;
         return contract.activateLoan(req.id, { value: collat });
@@ -739,7 +755,7 @@ function buildActiveLoanCard(req, loan, collateralInfo, chainNow) {
       <div class="meta-item">Collateral Type<strong>${COLLATERAL_LABEL[collateralType]}</strong></div>
       <div class="meta-item">Collateral Locked<strong>${
         collateralType === COLLATERAL_TYPE.NFT
-          ? `${collateralInfo.nftId} (${formatEth(collateralInfo.collateralEthValue)} ETH)`
+          ? `${escHtml(collateralInfo.nftId)} (${formatEth(collateralInfo.collateralEthValue)} ETH)`
           : `${formatEth(loan.collateralLocked)} ETH`
       }</strong></div>
       <div class="meta-item">Guarantor<strong>${guarantorText}</strong></div>
@@ -761,6 +777,8 @@ function buildActiveLoanCard(req, loan, collateralInfo, chainNow) {
     input.type        = "number";
     input.placeholder = "ETH to repay";
     input.step        = "0.001";
+    input.min         = "0";
+    input.max         = ethers.formatEther(remaining);
     input.style.maxWidth = "160px";
     const btnRepay = btn("Repay", "btn-sm btn-green");
     btnRepay.onclick = async () => {
@@ -783,9 +801,16 @@ function buildActiveLoanCard(req, loan, collateralInfo, chainNow) {
   if (overdue) {
     const btnDefault = btn("Trigger Default", "btn-sm btn-red");
     btnDefault.onclick = async () => txAction(btnDefault, async () => {
-      const value = Number(collateralInfo.collateralType) === COLLATERAL_TYPE.NFT
-        ? collateralInfo.collateralEthValue
-        : 0n;
+      const isNFT  = Number(collateralInfo.collateralType) === COLLATERAL_TYPE.NFT;
+      const value  = isNFT ? collateralInfo.collateralEthValue : 0n;
+      // For NFT-collateral defaults the keeper must send ETH equal to the NFT valuation.
+      // Pre-check balance so the error is readable rather than a node revert.
+      if (isNFT && value > 0n) {
+        const bal = await provider.getBalance(signerAddress);
+        if (bal < value) {
+          throw new Error(`Insufficient balance — need ${ethers.formatEther(value)} ETH to cover NFT valuation.`);
+        }
+      }
       return contract.triggerDefault(req.id, { value });
     });
     actions.appendChild(btnDefault);
@@ -873,7 +898,7 @@ async function renderHistory() {
         <td class="mono">${formatEth(loan.amountRepaid)} ETH</td>
         <td class="mono">${
           collateralType === COLLATERAL_TYPE.NFT
-            ? `${collateralInfo.nftId} (${formatEth(collateralInfo.collateralEthValue)} ETH)`
+            ? `${escHtml(collateralInfo.nftId)} (${formatEth(collateralInfo.collateralEthValue)} ETH)`
             : `${formatEth(loan.collateralLocked)} ETH`
         }</td>
         <td>

@@ -413,6 +413,20 @@ describe("CreditUnion", function () {
         .to.be.revertedWith("Active loan outstanding");
     });
 
+    it("reverts if borrower already has a pending loan", async function () {
+      const { cu, alice, bob } = await deploy();
+      await joinAndWait(cu, alice, E(2));
+      await joinAndWait(cu, bob, E(10));
+
+      // Submit first loan request (vote window still open)
+      const [threshRate, threshCollat] = await cu.computeThresholds(alice.address, E(0.1), 7 * ONE_DAY);
+      await requestLoan(cu, alice, E(0.1), threshRate, 7 * ONE_DAY, threshCollat);
+
+      // Second request must revert before the first is finalized
+      await expect(requestLoan(cu, alice, E(0.1), threshRate, 7 * ONE_DAY, threshCollat))
+        .to.be.revertedWith("Pending loan exists");
+    });
+
     it("reverts if amount exceeds 20% of pool", async function () {
       const { cu, alice, bob } = await deploy();
       await joinAndWait(cu, alice, E(2));
@@ -599,9 +613,28 @@ describe("CreditUnion", function () {
     });
   });
 
-  // ── 12. activateLoan() — wrong collateral ─────────────────────
+  // ── 12. activateLoan() — wrong collateral / concurrent-loan guard ────────
 
   describe("activateLoan() — wrong collateral", function () {
+    it("reverts with 'Pending loan exists' when borrower activates an approved loan while another request is pending", async function () {
+      const { cu, alice, bob } = await deploy();
+      await joinAndWait(cu, alice, E(2));
+      await joinAndWait(cu, bob, E(10));
+
+      // Loan A: approved
+      const loanIdA = await openLoan(cu, alice, [{ signer: bob, support: true }]);
+      const reqA    = await cu.loanRequests(loanIdA);
+
+      // Loan B: submit a second request now that pendingLoanIdOf[alice] was cleared by finalizeLoan
+      const [threshRate, threshCollat] = await cu.computeThresholds(alice.address, E(0.1), 7 * ONE_DAY);
+      await requestLoan(cu, alice, E(0.1), threshRate, 7 * ONE_DAY, threshCollat);
+
+      // Activating Loan A while Loan B is pending must revert
+      await expect(cu.connect(alice).activateLoan(loanIdA, { value: reqA.collateralOffered }))
+        .to.be.revertedWith("Pending loan exists");
+    });
+
+
     it("reverts if msg.value != collateralOffered", async function () {
       const { cu, alice, bob } = await deploy();
       await joinAndWait(cu, alice, E(2));
@@ -1409,6 +1442,49 @@ describe("CreditUnion", function () {
       await expect(cu.connect(bob).approveGuarantee(id)).to.be.revertedWith("Guarantee approval closed");
     });
 
+    it("reverts with 'Guarantor not needed' when a guarantor is supplied for a fully-collateralised ETH loan", async function () {
+      const { cu, alice, bob } = await deploy();
+      await joinAndWait(cu, alice, E(2));
+      await joinAndWait(cu, bob, E(10));
+
+      const amount = E(1);
+      const [rate] = await cu.computeThresholds(alice.address, amount, 7 * ONE_DAY);
+      // Offer full principal coverage — no guarantor needed; supplying one must revert
+      await expect(
+        cu.connect(alice).requestLoan(amount, rate, 7 * ONE_DAY, amount, COLLATERAL.ETH, 0n, "", bob.address)
+      ).to.be.revertedWith("Guarantor not needed");
+    });
+
+    it("reverts with 'Guarantor not a member' when proposed guarantor has never joined", async function () {
+      const { cu, alice, bob, keeper } = await deploy();
+      await joinAndWait(cu, alice, E(2));
+      await joinAndWait(cu, bob, E(10));
+      // keeper is not a member
+
+      const amount = E(1);
+      const [rate, collat] = await cu.computeThresholds(alice.address, amount, 7 * ONE_DAY);
+      await expect(requestLoan(cu, alice, amount, rate, 7 * ONE_DAY, collat, {
+        guarantor: keeper.address,
+        preserveCollateral: true,
+      })).to.be.revertedWith("Guarantor not a member");
+    });
+
+    it("reverts with 'Guarantor cannot cover shortfall' when guarantor has insufficient available value", async function () {
+      const { cu, alice, bob, carol } = await deploy();
+      await joinAndWait(cu, alice, E(2));
+      await joinAndWait(cu, bob, E(10));
+      // carol deposits only MIN_DEPOSIT — her pool value (~0.01 ETH) cannot cover the
+      // shortfall (principal − threshCollat) which will be several tenths of an ETH
+      await joinAndWait(cu, carol, E(0.01));
+
+      const amount = E(1);
+      const [rate, collat] = await cu.computeThresholds(alice.address, amount, 7 * ONE_DAY);
+      await expect(requestLoan(cu, alice, amount, rate, 7 * ONE_DAY, collat, {
+        guarantor: carol.address,
+        preserveCollateral: true,
+      })).to.be.revertedWith("Guarantor cannot cover shortfall");
+    });
+
     it("burns guarantor shares on default after borrower collateral is exhausted", async function () {
       const { cu, alice, bob, keeper } = await deploy();
       await joinAndWait(cu, alice, E(2));
@@ -1593,6 +1669,34 @@ describe("CreditUnion", function () {
       const rc = await tx.wait();
       const ev = rc.logs.find((l) => l.fragment?.name === "LoanRequested");
       expect(ev.args[3]).to.equal(tier);
+    });
+
+    it("activateLoan reverts when borrower already has an active loan (dual-activation guard)", async function () {
+      // Scenario: two requests submitted before either is activated. Both get approved.
+      // Activating the first succeeds; activating the second must revert — not silently
+      // overwrite activeLoanIdOf and orphan the first loan.
+      const { cu, alice, bob } = await deploy();
+      await joinAndWait(cu, alice, E(2));
+      await joinAndWait(cu, bob, E(10));
+
+      // Request loan A then loan B before activating either
+      const idA = await openLoan(cu, alice, [{ signer: bob, support: true }],
+        { amount: E(0.3), rate: 1000, duration: 7 * ONE_DAY });
+      const idB = await openLoan(cu, alice, [{ signer: bob, support: true }],
+        { amount: E(0.3), rate: 1000, duration: 7 * ONE_DAY });
+
+      const reqA = await cu.getLoanRequest(idA);
+      const reqB = await cu.getLoanRequest(idB);
+      expect(reqA.status).to.equal(STATUS.Approved);
+      expect(reqB.status).to.equal(STATUS.Approved);
+
+      // Activate loan A — should succeed
+      await cu.connect(alice).activateLoan(idA, { value: reqA.collateralOffered });
+      expect(await cu.activeLoanIdOf(alice.address)).to.equal(idA);
+
+      // Attempt to activate loan B — must revert now that loan A is active
+      await expect(cu.connect(alice).activateLoan(idB, { value: reqB.collateralOffered }))
+        .to.be.revertedWith("Active loan outstanding");
     });
   });
 });

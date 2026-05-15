@@ -21,7 +21,7 @@ import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
  *
  * Voting weight (integer approximation)
  * ----------------------------------------
- *   weight = sqrt(depositAmount_wei) * bitLength(months_as_member + 1)
+ *   weight = sqrt(depositAmount_wei) * floor_log2(months_as_member + 1)
  *
  *   sqrt  : Babylonian method, applied directly to wei value.
  *           0.01 ETH = 1e16 wei → sqrt = 1e8  (non-zero at minimum deposit)
@@ -72,7 +72,7 @@ contract CreditUnion is ReentrancyGuard {
     // ─────────────────────────────────────────────
 
     struct Member {
-        uint256 depositAmount;   // current ETH value of remaining shares (wei); recalculated to pool value on addDeposit and withdraw
+        uint256 depositAmount;   // cost-basis in wei; lazily updated to current pool value on addDeposit/withdraw — may lag pool appreciation between interactions
         uint256 joinTimestamp;   // block.timestamp at first deposit
         uint256 shares;          // pool shares currently held
         bool    exists;
@@ -212,6 +212,7 @@ contract CreditUnion is ReentrancyGuard {
     mapping(uint256 => mapping(address => bool))   public loanVoteSupport;  // requestId => voter => support
     mapping(uint256 => address[])                  private loanVoterList;   // requestId => ordered voter list
     mapping(address => uint256)                    public activeLoanIdOf;   // 0 = no active loan
+    mapping(address => uint256)                    public pendingLoanIdOf;  // 0 = no pending/approved loan
 
     // ─────────────────────────────────────────────
     //  State — Collateral & Reputation
@@ -414,6 +415,7 @@ contract CreditUnion is ReentrancyGuard {
     ) external nonReentrant whenNotPaused {
         require(members[msg.sender].exists,  "Not a member");
         require(activeLoanIdOf[msg.sender] == 0, "Active loan outstanding");
+        require(pendingLoanIdOf[msg.sender] == 0, "Pending loan exists");
         require(amount > 0,                  "Zero amount");
         require(amount <= maxLoanSize,        "Exceeds max loan size");
         require(totalPoolETH > 0,            "Empty pool");
@@ -526,6 +528,7 @@ contract CreditUnion is ReentrancyGuard {
             guaranteeRequired        : guaranteeRequired
         });
 
+        pendingLoanIdOf[msg.sender] = id;
         emit LoanRequested(id, msg.sender, amount, tier, storedThresholdCollateral);
     }
 
@@ -574,10 +577,11 @@ contract CreditUnion is ReentrancyGuard {
      *         denominator. Abstentions by other members still count against.
      * @param requestId Loan request ID.
      */
-    function finalizeLoan(uint256 requestId) external nonReentrant {
+    function finalizeLoan(uint256 requestId) external nonReentrant whenNotPaused {
         LoanRequest storage req = loanRequests[requestId];
         require(req.status == LoanStatus.Pending, "Not pending");
         require(block.timestamp >= req.voteDeadline, "Voting still open");
+        pendingLoanIdOf[req.borrower] = 0;
 
         // Dynamic recompute: walk the voter list and weight each voter at their
         // *current* deposit + tenure rather than the weight they had when they cast.
@@ -623,6 +627,8 @@ contract CreditUnion is ReentrancyGuard {
         LoanRequest storage req = loanRequests[requestId];
         require(req.status == LoanStatus.Approved, "Not approved");
         require(msg.sender == req.borrower, "Not borrower");
+        require(activeLoanIdOf[msg.sender] == 0, "Active loan outstanding");
+        require(pendingLoanIdOf[msg.sender] == 0, "Pending loan exists");
 
         // Expire if activation window has passed
         if (block.timestamp > req.approvalTimestamp + ACTIVATION_WINDOW) {

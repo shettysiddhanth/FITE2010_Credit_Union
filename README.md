@@ -96,6 +96,20 @@ requestLoan() → [3-day vote window] → finalizeLoan()
 
 **Tier re-evaluation at activation:** when `activateLoan` is called, the tier is re-determined against the *current* pool size. If the pool has shrunk since `requestLoan`, the loan may escalate to a higher-risk tier requiring more collateral. Tier only escalates — it never de-escalates to a lower tier.
 
+### One Active Loan Per Member
+
+A member can hold **at most one active loan at a time**. This is enforced by `activeLoanIdOf[member]` — a per-address pointer that's set to the loan ID at `activateLoan`, cleared to `0` on full repayment or default, and checked at every borrowing-relevant entry point.
+
+| Action | What's blocked while you have an active loan |
+|---|---|
+| `requestLoan` | Reverts with `"Active loan outstanding"` — you can't even submit a second request |
+| `withdraw` | Reverts — you can't pull your pool stake out while you owe the pool |
+| `repay` | Allowed (this is how you close out) |
+
+Sequential borrowing is fine — repay your current loan and you can immediately request a new one with no cooldown. But **stacking** is impossible: no portfolio borrowing, no concurrent loans across tiers, no single member holding multiple outstanding obligations. Each member has one open exposure to the pool at a time, and the risk model (tier classification, threshold collateral, voting weight) assumes that single-loan view throughout.
+
+A pending request that hasn't been activated yet does *not* block a new request — the gate is on `Active` status specifically. But once you activate, the lock is in place until the loan resolves.
+
 ### Reserve Requirement
 
 The pool must always hold ≥10% of `totalDepositsEver` after any voluntary outflow (withdrawal or loan disbursement). Forced losses (default bounty, socialized bad debt) bypass this check.

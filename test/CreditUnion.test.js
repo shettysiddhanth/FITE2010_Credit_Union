@@ -700,25 +700,40 @@ describe("CreditUnion", function () {
       await joinAndWait(cu, alice, E(2));
       await joinAndWait(cu, bob, E(10));
 
-      // Set bounty rate to max via governance
+      // Set bounty rate to max via governance so the cap is the binding constraint
       await govChange(cu, treasurer,
         [{ signer: alice, support: true }, { signer: bob, support: true }],
         PARAM.KeeperBountyRate, 200n);
 
+      const principal = E(1);
       const loanId = await openLoan(cu, alice, [{ signer: bob, support: true }],
-        { amount: E(1), rate: 1000, duration: 7 * ONE_DAY });
+        { amount: principal, rate: 1000, duration: 7 * ONE_DAY });
 
       const req = await cu.loanRequests(loanId);
       await cu.connect(alice).activateLoan(loanId, { value: req.collateralOffered });
       await time.increase(8 * ONE_DAY);
 
-      const poolBefore = await cu.totalPoolETH();
-      await cu.connect(keeper).triggerDefault(loanId);
-      const poolAfter = await cu.totalPoolETH();
+      // Measure the keeper's balance delta directly — this is the bounty actually
+      // received, with no dependence on how much collateral was seized into the
+      // pool. (The previous version compared poolBefore-poolAfter, which equals
+      // bounty - seized and can be negative, masking a broken cap.)
+      const keeperBefore = await ethers.provider.getBalance(keeper.address);
+      const tx  = await cu.connect(keeper).triggerDefault(loanId);
+      const rc  = await tx.wait();
+      const gas = rc.gasUsed * rc.gasPrice;
+      const keeperAfter = await ethers.provider.getBalance(keeper.address);
 
-      // Bounty ≤ 2% of 1 ETH principal = 0.02 ETH
-      const bountyDeducted = poolBefore - poolAfter + (await cu.collateralHeld(loanId));
-      expect(bountyDeducted).to.be.lte(E(0.02) + E(0.001));
+      const bountyReceived = keeperAfter + gas - keeperBefore;
+
+      // Cap = 2% of principal = MAX_BOUNTY_BPS / BPS_DENOMINATOR
+      const maxBounty = principal * 200n / 10_000n;
+      expect(bountyReceived).to.be.lte(maxBounty);
+      expect(bountyReceived).to.be.gt(0n);   // and we actually got *something*
+
+      // Cross-check: the DefaultTriggered event's bounty arg matches the on-wire transfer
+      const ev = rc.logs.find((l) => l.fragment?.name === "DefaultTriggered");
+      expect(ev.args[2]).to.equal(bountyReceived);
+      expect(ev.args[2]).to.be.lte(maxBounty);
     });
 
     it("seizes collateral into pool on default", async function () {

@@ -719,30 +719,6 @@
   {
     "inputs": [
       {
-        "internalType": "uint256",
-        "name": "amount",
-        "type": "uint256"
-      },
-      {
-        "internalType": "enum CreditUnion.LoanTier",
-        "name": "tier",
-        "type": "uint8"
-      }
-    ],
-    "name": "collateralRequiredFor",
-    "outputs": [
-      {
-        "internalType": "uint256",
-        "name": "",
-        "type": "uint256"
-      }
-    ],
-    "stateMutability": "pure",
-    "type": "function"
-  },
-  {
-    "inputs": [
-      {
         "internalType": "address",
         "name": "borrower",
         "type": "address"
@@ -1004,11 +980,6 @@
           },
           {
             "internalType": "uint256",
-            "name": "votesAgainst",
-            "type": "uint256"
-          },
-          {
-            "internalType": "uint256",
             "name": "voteDeadline",
             "type": "uint256"
           },
@@ -1138,11 +1109,6 @@
           },
           {
             "internalType": "uint256",
-            "name": "votesAgainst",
-            "type": "uint256"
-          },
-          {
-            "internalType": "uint256",
             "name": "voteDeadline",
             "type": "uint256"
           },
@@ -1160,11 +1126,6 @@
             "internalType": "enum CreditUnion.LoanTier",
             "name": "tier",
             "type": "uint8"
-          },
-          {
-            "internalType": "uint256",
-            "name": "collateralRequired",
-            "type": "uint256"
           },
           {
             "internalType": "uint256",
@@ -1288,11 +1249,6 @@
       {
         "internalType": "uint256",
         "name": "votesFor",
-        "type": "uint256"
-      },
-      {
-        "internalType": "uint256",
-        "name": "votesAgainst",
         "type": "uint256"
       },
       {
@@ -1485,11 +1441,6 @@
       },
       {
         "internalType": "uint256",
-        "name": "votesAgainst",
-        "type": "uint256"
-      },
-      {
-        "internalType": "uint256",
         "name": "voteDeadline",
         "type": "uint256"
       },
@@ -1507,11 +1458,6 @@
         "internalType": "enum CreditUnion.LoanTier",
         "name": "tier",
         "type": "uint8"
-      },
-      {
-        "internalType": "uint256",
-        "name": "collateralRequired",
-        "type": "uint256"
       },
       {
         "internalType": "uint256",

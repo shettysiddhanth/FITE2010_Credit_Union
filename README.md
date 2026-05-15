@@ -42,27 +42,19 @@ Approval thresholds are dynamic and depend on loan duration: ≤30 days requires
 
 ### Loan Tiers & Collateral
 
-| Tier | Condition | Collateral |
-|------|-----------|------------|
-| **Trust** | amount ≤ 2% pool AND duration ≤ 30 days | 0% |
-| **Standard** | amount ≤ 10% pool AND duration ≤ 90 days | 20% of principal |
-| **Secured** | everything else | 50% of principal |
+| Tier | Condition | Base Collateral |
+|------|-----------|-----------------|
+| **Trust** | amount ≤ 2% pool AND duration ≤ 30 days | 15% of principal |
+| **Standard** | amount ≤ 10% pool AND duration ≤ 90 days | 40% of principal |
+| **Secured** | everything else | 75% of principal |
 
 Trust tier additionally requires no prior default AND (≥1 prior successful repayment OR membership ≥30 days).
 
-Collateral is locked by the borrower at `activateLoan` time and returned on full repayment. On default it is seized into the pool to offset bad debt.
+Collateral is locked by the borrower at `activateLoan` time and returned on full repayment. On default it is seized into the pool to offset bad debt. These are *base* rates — the effective minimum collateral for any specific request is then adjusted dynamically by loan size and borrower stake (see formulas below).
 
 ### Risk-Adjusted Rates & Collateral
 
 **Why higher baselines?** Because this is an anonymous, pseudonymous environment anyone can take funds and vanish. Traditional credit unions rely on social trust and legal enforcement; this contract has neither. Collateral baselines and interest rates must compensate for the absence of those mechanisms.
-
-**New base collateral rates:**
-
-| Tier | Base Collateral |
-|------|----------------|
-| Trust | 15% of principal |
-| Standard | 40% of principal |
-| Secured | 75% of principal |
 
 **Dynamic threshold rate formula:**
 
@@ -103,7 +95,9 @@ requestLoan() → [3-day vote window] → finalizeLoan()
 
 ### Reserve Requirement
 
-The pool must always hold ≥10% of `totalDepositsEver` after any voluntary outflow (withdrawal or loan disbursement). Forced losses (default bounty) bypass this check.
+The pool must always hold ≥10% of `totalDepositsEver` after any voluntary outflow (withdrawal or loan disbursement). Forced losses (default bounty, socialized bad debt) bypass this check.
+
+**Long-term implication:** `totalDepositsEver` is monotonically increasing — it is never decremented, not even when losses shrink the pool. After enough defaults the reserve floor (10% of cumulative-ever deposits) can exceed the current `totalPoolETH`, at which point withdrawals and new loan disbursements are blocked until interest income rebuilds the pool back above the floor. This is intentional — it forces a healthy pool to recover before more capital can leave — but pool operators should monitor `totalPoolETH` vs `totalDepositsEver × 10%` and add deposits or wait for repayments if outflows start reverting.
 
 ---
 
@@ -114,6 +108,8 @@ The pool must always hold ≥10% of `totalDepositsEver` after any voluntary outf
 
 No MetaMask or browser wallet required. The frontend connects directly to the Hardhat node using a built-in account selector.
 
+> **Note on toolchain versions:** the project pins `hardhat@^2.26.0` to match `@nomicfoundation/hardhat-toolbox@^5.0.0`'s peer range. Hardhat 3 is a major rewrite with a different plugin model and is not compatible with this config.
+
 ---
 
 ## Quickstart
@@ -121,16 +117,12 @@ No MetaMask or browser wallet required. The frontend connects directly to the Ha
 ### 1. Start the development environment
 
 ```bash
-git clone https://github.com/uddashya/Credit_union.git
-cd Credit_union
+git clone https://github.com/shettysiddhanth/FITE2010_Credit_Union.git
+cd FITE2010_Credit_Union
 docker compose run --service-ports hardhat bash
 ```
 
-Inside the container:
-
-```bash
-npm install
-```
+The first build installs dependencies into the image with `npm ci` (using the committed `package-lock.json`), so you don't need to run `npm install` inside the container. If you change `package.json`, rebuild with `docker compose build hardhat`.
 
 ### 2. Start the Hardhat node (terminal 1)
 

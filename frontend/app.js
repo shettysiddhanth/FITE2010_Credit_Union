@@ -109,8 +109,17 @@ async function updateBlockTime() {
 async function maybeShowTreasurerTab() {
   try {
     const treas = await contract.treasurer();
+    const tabBtn = document.getElementById("btn-tab-treasurer");
     if (treas.toLowerCase() === signerAddress.toLowerCase()) {
-      document.getElementById("btn-tab-treasurer").classList.remove("hidden");
+      tabBtn.classList.remove("hidden");
+    } else {
+      tabBtn.classList.add("hidden");
+      // If we just lost the role and the treasurer tab is currently active,
+      // fall back to Pool Overview so we're not stuck on an empty/error pane.
+      const activeBtn = document.querySelector("button.tab.active");
+      if (activeBtn?.dataset.tab === "treasurer") {
+        document.querySelector('button.tab[data-tab="overview"]').click();
+      }
     }
   } catch { /* ignore */ }
 }
@@ -140,6 +149,10 @@ function activeTab() {
 }
 
 async function refreshCurrentTab() {
+  // Re-check treasurer role on every refresh so a TransferTreasurer governance
+  // execution updates tab visibility for both the old and new treasurer without
+  // requiring them to re-select their account from the dropdown.
+  if (contract) await maybeShowTreasurerTab();
   await refreshTab(activeTab());
 }
 
@@ -208,8 +221,8 @@ function setupOverviewActions(memberData, paused, pool) {
 
   // Withdraw: input is in ETH; shares are wei-scale (1 ETH ≈ 10^18 shares
   // for the first depositor) so we derive shareAmount from the ETH value.
-  const withdrawInput = document.getElementById("withdraw-shares");
-  withdrawInput.placeholder = "ETH to withdraw";
+  const withdrawInput = document.getElementById("withdraw-eth");
+  withdrawInput.placeholder = "ETH amount";
   const btnWithdraw = document.getElementById("btn-withdraw");
   btnWithdraw.onclick = async () => {
     const ethInput = withdrawInput.value;

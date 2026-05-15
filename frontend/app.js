@@ -7,6 +7,9 @@
 let provider, signer, contract, ABI;
 let signerAddress = null;
 let contractAddress = null;
+let hardhatAccounts = [];
+let nftValues = [];
+let selectedNFT = null;
 
 // LoanStatus / LoanTier mirrors from Solidity enum
 const STATUS = { Pending: 0, Approved: 1, Rejected: 2, Active: 3, Repaid: 4, Defaulted: 5 };
@@ -14,20 +17,25 @@ const STATUS_LABEL    = ["Pending", "Approved", "Rejected", "Active", "Repaid", 
 const TIER_LABEL      = ["Trust", "Standard", "Secured"];
 const TIER_CLASS      = ["tier-trust", "tier-standard", "tier-secured"];
 const GOV_PARAM_LABEL = ["Max Loan Size", "Min Interest Rate", "Keeper Bounty Rate", "Unpause", "Transfer Treasurer"];
+const COLLATERAL_TYPE = { ETH: 0, NFT: 1 };
+const COLLATERAL_LABEL = ["ETH", "NFT"];
 
 // ── Boot ──────────────────────────────────────────────────────
 
 async function boot() {
   try {
-    const [addrRes, abiRes] = await Promise.all([
+    const [addrRes, abiRes, nftRes] = await Promise.all([
       fetch("contractAddress.json"),
       fetch("contractABI.json"),
+      fetch("nftValues.json"),
     ]);
     const addrJson = await addrRes.json();
     ABI            = await abiRes.json();
+    nftValues      = await nftRes.json();
     contractAddress = addrJson.address;
+    selectedNFT = loadSelectedNFT();
   } catch {
-    toast("Could not load contractAddress.json / contractABI.json. Run the deploy script first.", "error");
+    toast("Could not load contractAddress.json / contractABI.json / nftValues.json. Run the deploy script first.", "error");
     return;
   }
 
@@ -48,12 +56,13 @@ async function initProvider() {
       toast("No accounts found on Hardhat node.", "error");
       return;
     }
+    hardhatAccounts = accounts.map((acct, i) => ({ index: i, address: acct.address }));
 
     const select = document.getElementById("account-select");
-    accounts.forEach((acct, i) => {
+    hardhatAccounts.forEach((acct) => {
       const opt = document.createElement("option");
       opt.value = acct.address;
-      opt.textContent = `#${i}  ${acct.address}`;
+      opt.textContent = `#${acct.index}  ${acct.address}`;
       select.appendChild(opt);
     });
 
@@ -88,6 +97,7 @@ async function connectAccount(address) {
 
 function setupDevTools() {
   updateBlockTime();
+  setupNFTDevTools();
   document.getElementById("btn-advance-time").onclick = async () => {
     const days = parseInt(document.getElementById("advance-days").value) || 31;
     // evm_increaseTime shifts the clock; evm_mine seals a new block so the
@@ -98,6 +108,59 @@ function setupDevTools() {
     toast(`Chain time advanced ${days} days.`, "success");
     await refreshCurrentTab();
   };
+}
+
+function setupNFTDevTools() {
+  const select = document.getElementById("dev-nft-select");
+  if (!select) return;
+  select.innerHTML = '<option value="">Select demo NFT</option>';
+  nftValues.forEach((nft) => {
+    const opt = document.createElement("option");
+    opt.value = nft.id;
+    opt.textContent = `${nft.id} — ${nft.name} (${nft.valueEth} ETH)`;
+    select.appendChild(opt);
+  });
+  select.value = selectedNFT?.id || "";
+  renderSelectedNFT();
+
+  select.onchange = () => {
+    selectedNFT = nftValues.find((nft) => nft.id === select.value) || null;
+    if (selectedNFT) {
+      localStorage.setItem("selectedNFT", JSON.stringify(selectedNFT));
+    } else {
+      localStorage.removeItem("selectedNFT");
+    }
+    renderSelectedNFT();
+    if (activeTab() === "requests") setupRequestForm();
+  };
+
+  document.getElementById("btn-clear-nft").onclick = () => {
+    selectedNFT = null;
+    select.value = "";
+    localStorage.removeItem("selectedNFT");
+    renderSelectedNFT();
+    if (activeTab() === "requests") setupRequestForm();
+  };
+}
+
+function loadSelectedNFT() {
+  try {
+    const saved = JSON.parse(localStorage.getItem("selectedNFT") || "null");
+    if (!saved) return null;
+    return nftValues.find((nft) => nft.id === saved.id) || null;
+  } catch {
+    return null;
+  }
+}
+
+function renderSelectedNFT() {
+  const el = document.getElementById("selected-nft-detail");
+  if (!el) return;
+  if (!selectedNFT) {
+    el.textContent = "No NFT selected";
+    return;
+  }
+  el.textContent = `${selectedNFT.id} | ${selectedNFT.name} | ${selectedNFT.valueEth} ETH`;
 }
 
 async function updateBlockTime() {
@@ -305,26 +368,63 @@ function setupRequestForm() {
   const ratEl     = document.getElementById("req-rate");
   const durEl     = document.getElementById("req-duration");
   const collatEl  = document.getElementById("req-collateral");
+  const typeEl    = document.getElementById("req-collateral-type");
+  const guarantorField = document.getElementById("guarantor-field");
+  const guarantorEl = document.getElementById("req-guarantor");
+  const nftPreview = document.getElementById("nft-loan-preview");
   const preview   = document.getElementById("tier-preview");
 
   const updatePreview = async () => {
     try {
       const amt = parseFloat(amtEl.value);
       const dur = parseInt(durEl.value);
-      if (!amt || !dur) { preview.classList.add("hidden"); return; }
+      if (!amt || !dur) {
+        preview.classList.add("hidden");
+        nftPreview.classList.add("hidden");
+        guarantorField.classList.add("hidden");
+        return;
+      }
       const amtWei  = ethers.parseEther(String(amt));
       const durSecs = BigInt(dur * 86400);
       const tier    = Number(await contract.determineTier(amtWei, durSecs));
       const [threshRate, threshCollat] = await contract.computeThresholds(signerAddress, amtWei, durSecs);
+      const collateralType = Number(typeEl.value);
+      const nftRequirement = await contract.computeNFTCollateralRequirement(signerAddress, amtWei, durSecs);
 
       document.getElementById("tier-badge").textContent = TIER_LABEL[tier];
       document.getElementById("tier-badge").className  = "tier-badge " + TIER_CLASS[tier];
       document.getElementById("tier-thresh-rate").textContent = (Number(threshRate) / 100).toFixed(2) + "%";
-      document.getElementById("tier-collateral").textContent  = formatEth(threshCollat) + " ETH";
+      document.getElementById("tier-collateral").textContent  =
+        formatEth(collateralType === COLLATERAL_TYPE.NFT ? nftRequirement : threshCollat) + " ETH";
 
       // Auto-fill collateral input with threshold if user hasn't changed it
-      if (!collatEl.dataset.userEdited) {
+      if (collateralType === COLLATERAL_TYPE.NFT) {
+        collatEl.disabled = true;
+        collatEl.value = "0";
+        nftPreview.textContent = selectedNFT
+          ? `Selected NFT: ${selectedNFT.id} | ${selectedNFT.name} | ${selectedNFT.valueEth} ETH valuation`
+          : "Select an NFT in Dev Tools before submitting an NFT-backed loan.";
+        nftPreview.classList.remove("hidden");
+        guarantorField.classList.add("hidden");
+      } else {
+        collatEl.disabled = false;
+        nftPreview.classList.add("hidden");
+      }
+
+      if (collateralType === COLLATERAL_TYPE.ETH && !collatEl.dataset.userEdited) {
         collatEl.value = ethers.formatEther(threshCollat);
+      }
+
+      if (collateralType === COLLATERAL_TYPE.ETH) {
+        const collatInput = parseFloat(collatEl.value);
+        const collatWei = collatInput ? ethers.parseEther(String(collatInput)) : 0n;
+        if (collatWei < amtWei && collatWei >= threshCollat) {
+          guarantorField.classList.remove("hidden");
+          await populateGuarantors(guarantorEl, amtWei - collatWei);
+        } else {
+          guarantorField.classList.add("hidden");
+          guarantorEl.value = "";
+        }
       }
 
       // Compute boost indicators
@@ -332,9 +432,12 @@ function setupRequestForm() {
       const collatInput = parseFloat(collatEl.value);
       const boostHint   = document.getElementById("tier-boost-hint");
       const rateBps     = rateInput ? BigInt(Math.round(rateInput * 100)) : 0n;
-      const collatWei   = collatInput ? ethers.parseEther(String(collatInput)) : 0n;
+      const collatWei   = collateralType === COLLATERAL_TYPE.NFT && selectedNFT
+        ? ethers.parseEther(String(selectedNFT.valueEth))
+        : collatInput ? ethers.parseEther(String(collatInput)) : 0n;
+      const boostThreshold = collateralType === COLLATERAL_TYPE.NFT ? nftRequirement : threshCollat;
       const rateBoost   = rateBps >= threshRate * 13000n / 10000n;
-      const collatBoost = collatWei >= threshCollat * 13000n / 10000n;
+      const collatBoost = collatWei >= boostThreshold * 13000n / 10000n;
       if (rateBoost || collatBoost) {
         const dims = [];
         if (rateBoost)   dims.push("rate");
@@ -355,6 +458,10 @@ function setupRequestForm() {
   amtEl.oninput    = updatePreview;
   durEl.oninput    = updatePreview;
   ratEl.oninput    = updatePreview;
+  typeEl.oninput    = () => {
+    delete collatEl.dataset.userEdited;
+    updatePreview();
+  };
   collatEl.oninput = () => {
     collatEl.dataset.userEdited = "1";
     updatePreview();
@@ -368,11 +475,59 @@ function setupRequestForm() {
     await txAction(e.target, () => {
       const rateBps  = BigInt(Math.round(parseFloat(rate) * 100));
       const durSecs  = BigInt(parseInt(dur)) * 86400n;
+      const amtWei = ethers.parseEther(amt);
+      const collateralType = Number(typeEl.value);
       const collatInput = collatEl.value;
-      const collatWei   = collatInput ? ethers.parseEther(collatInput) : 0n;
-      return contract.requestLoan(ethers.parseEther(amt), rateBps, durSecs, collatWei);
+      const collatWei = collateralType === COLLATERAL_TYPE.NFT
+        ? 0n
+        : collatInput ? ethers.parseEther(collatInput) : 0n;
+      const nftValueWei = collateralType === COLLATERAL_TYPE.NFT && selectedNFT
+        ? ethers.parseEther(String(selectedNFT.valueEth))
+        : 0n;
+      const nftId = collateralType === COLLATERAL_TYPE.NFT && selectedNFT ? selectedNFT.id : "";
+      const guarantor = collateralType === COLLATERAL_TYPE.ETH && collatWei < amtWei
+        ? (guarantorEl.value || ethers.ZeroAddress)
+        : ethers.ZeroAddress;
+      if (collateralType === COLLATERAL_TYPE.NFT && !selectedNFT) {
+        throw new Error("Select an NFT in Dev Tools first.");
+      }
+      return contract.requestLoan(
+        amtWei,
+        rateBps,
+        durSecs,
+        collatWei,
+        collateralType,
+        nftValueWei,
+        nftId,
+        guarantor
+      );
     });
   };
+
+  updatePreview();
+}
+
+async function populateGuarantors(selectEl, shortfallWei) {
+  const existing = selectEl.value;
+  selectEl.innerHTML = '<option value="">Select guarantor</option>';
+  for (const acct of hardhatAccounts) {
+    if (acct.address.toLowerCase() === signerAddress.toLowerCase()) continue;
+    try {
+      const [member, locked] = await Promise.all([
+        contract.members(acct.address),
+        contract.lockedGuarantorValueEth(acct.address),
+      ]);
+      if (!member.exists) continue;
+      const value = await contract.getMemberValue(acct.address);
+      const available = value > locked ? value - locked : 0n;
+      const opt = document.createElement("option");
+      opt.value = acct.address;
+      opt.textContent = `#${acct.index} ${truncateAddr(acct.address)} | available ${formatEth(available)} ETH`;
+      opt.disabled = available < shortfallWei;
+      selectEl.appendChild(opt);
+    } catch { /* ignore unavailable account rows */ }
+  }
+  selectEl.value = existing;
 }
 
 async function buildRequestCard(req, memberData, chainNow) {
@@ -385,12 +540,19 @@ async function buildRequestCard(req, memberData, chainNow) {
   const timeLeft  = remaining > 0 ? formatDuration(remaining) : "Voting closed";
 
   const [liveTotalWeight, liveVotesFor] = await contract.getLiveVoteTotals(req.id);
+  const collateralInfo = await contract.getLoanCollateralInfo(req.id);
   const pct = liveTotalWeight > 0n
     ? Math.min(100, Math.round(Number(liveVotesFor * 10000n / liveTotalWeight) / 100))
     : 0;
 
   const myVoted     = await contract.hasVoted(req.id, signerAddress);
   const isBorrower  = req.borrower.toLowerCase() === signerAddress.toLowerCase();
+  const collateralType = Number(collateralInfo.collateralType);
+  const guarantor = collateralInfo.guarantor;
+  const requiresGuarantor = collateralInfo.requiresGuarantor;
+  const guarantorApproved = collateralInfo.guarantorApproved;
+  const isGuarantor = guarantor && guarantor !== ethers.ZeroAddress &&
+    guarantor.toLowerCase() === signerAddress.toLowerCase();
   const myWeight    = await contract.computeVotingWeight(signerAddress);
   const canVote     = memberData.exists && !isBorrower && !myVoted && remaining > 0 && myWeight > 0n;
 
@@ -417,7 +579,17 @@ async function buildRequestCard(req, memberData, chainNow) {
       <div class="meta-item">Duration<strong>${formatDuration(Number(req.duration))}</strong></div>
       <div class="meta-item">Min Rate<strong>${(Number(req.thresholdRate)/100).toFixed(2)}%</strong></div>
       <div class="meta-item">Min Collateral<strong>${formatEth(req.thresholdCollateral)} ETH</strong></div>
-      <div class="meta-item">Collateral Offered<strong>${formatEth(req.collateralOffered)} ETH</strong></div>
+      <div class="meta-item">Collateral Type<strong>${COLLATERAL_LABEL[collateralType]}</strong></div>
+      <div class="meta-item">Collateral Offered<strong>${
+        collateralType === COLLATERAL_TYPE.NFT
+          ? `${collateralInfo.nftId} (${formatEth(collateralInfo.collateralEthValue)} ETH)`
+          : `${formatEth(req.collateralOffered)} ETH`
+      }</strong></div>
+      <div class="meta-item">Guarantor<strong>${
+        requiresGuarantor
+          ? `${truncateAddr(guarantor)} ${guarantorApproved ? "approved" : "pending"}`
+          : "None"
+      }</strong></div>
       <div class="meta-item">Time left<strong>${timeLeft}</strong></div>
     </div>
     <div style="margin-bottom:10px">
@@ -441,6 +613,17 @@ async function buildRequestCard(req, memberData, chainNow) {
     actions.innerHTML = '<span style="color:var(--muted);font-size:12px">Voted</span>';
   }
 
+  if (isGuarantor && requiresGuarantor && !guarantorApproved && remaining > 0 && !isApproved) {
+    const btnGuarantee = btn("Approve Guarantee", "btn-sm btn-amber");
+    btnGuarantee.onclick = async () => txAction(btnGuarantee, async () => contract.approveGuarantee(req.id));
+    actions.appendChild(btnGuarantee);
+  } else if (requiresGuarantor && !guarantorApproved && !isApproved) {
+    const msg = document.createElement("span");
+    msg.style.cssText = "color:var(--amber);font-size:12px";
+    msg.textContent = "Guarantee pending";
+    actions.appendChild(msg);
+  }
+
   if (!isApproved && remaining <= 0) {
     const btnFinalize = btn("Finalize", "btn-sm btn-ghost");
     btnFinalize.onclick = async () => txAction(btnFinalize, async () => contract.finalizeLoan(req.id));
@@ -460,6 +643,10 @@ async function buildRequestCard(req, memberData, chainNow) {
     } else {
       const btnActivate = btn("Activate Loan", "btn-sm btn-green");
       btnActivate.onclick = async () => txAction(btnActivate, async () => {
+        const info = await contract.getLoanCollateralInfo(req.id);
+        if (Number(info.collateralType) === COLLATERAL_TYPE.NFT) {
+          return contract.activateLoan(req.id, { value: 0 });
+        }
         // Re-evaluate tier at activation time — pool may have changed since requestLoan,
         // potentially escalating the required collateral. Only escalate, never de-escalate.
         // The contract requires max(collateralOffered, currentThreshCollat).
@@ -495,8 +682,11 @@ async function renderActive() {
     for (let i = 1; i <= totalLoans; i++) {
       const req = await contract.getLoanRequest(i);
       if (Number(req.status) === STATUS.Active) {
-        const loan = await contract.getActiveLoan(i);
-        active.push({ req, loan });
+        const [loan, collateralInfo] = await Promise.all([
+          contract.getActiveLoan(i),
+          contract.getLoanCollateralInfo(i),
+        ]);
+        active.push({ req, loan, collateralInfo });
       }
     }
 
@@ -506,13 +696,13 @@ async function renderActive() {
     }
 
     list.innerHTML = "";
-    for (const { req, loan } of active) {
-      list.appendChild(buildActiveLoanCard(req, loan, chainNow));
+    for (const { req, loan, collateralInfo } of active) {
+      list.appendChild(buildActiveLoanCard(req, loan, collateralInfo, chainNow));
     }
   } catch (e) { toast(parseError(e), "error"); }
 }
 
-function buildActiveLoanCard(req, loan, chainNow) {
+function buildActiveLoanCard(req, loan, collateralInfo, chainNow) {
   const card = document.createElement("div");
   card.className = "loan-card";
 
@@ -526,6 +716,10 @@ function buildActiveLoanCard(req, loan, chainNow) {
   const isBorrower = loan.borrower.toLowerCase() === signerAddress.toLowerCase();
   const tierLabel  = TIER_LABEL[Number(loan.tier)];
   const tierCls    = TIER_CLASS[Number(loan.tier)];
+  const collateralType = Number(collateralInfo.collateralType);
+  const guarantorText = collateralInfo.requiresGuarantor
+    ? `${truncateAddr(collateralInfo.guarantor)} (${formatEth(collateralInfo.guaranteeValue)} ETH)`
+    : "None";
 
   card.innerHTML = `
     <div class="loan-card-header">
@@ -542,7 +736,13 @@ function buildActiveLoanCard(req, loan, chainNow) {
       <div class="meta-item">Total Due<strong>${formatEth(loan.totalDue)} ETH</strong></div>
       <div class="meta-item">Repaid<strong>${formatEth(loan.amountRepaid)} ETH</strong></div>
       <div class="meta-item">Remaining<strong>${formatEth(remaining)} ETH</strong></div>
-      <div class="meta-item">Collateral Locked<strong>${formatEth(loan.collateralLocked)} ETH</strong></div>
+      <div class="meta-item">Collateral Type<strong>${COLLATERAL_LABEL[collateralType]}</strong></div>
+      <div class="meta-item">Collateral Locked<strong>${
+        collateralType === COLLATERAL_TYPE.NFT
+          ? `${collateralInfo.nftId} (${formatEth(collateralInfo.collateralEthValue)} ETH)`
+          : `${formatEth(loan.collateralLocked)} ETH`
+      }</strong></div>
+      <div class="meta-item">Guarantor<strong>${guarantorText}</strong></div>
       <div class="meta-item">Deadline<strong>${overdue ? "⚠ " : ""}${new Date(deadline * 1000).toLocaleDateString()}</strong></div>
     </div>
     <div style="margin-bottom:10px">
@@ -582,7 +782,12 @@ function buildActiveLoanCard(req, loan, chainNow) {
 
   if (overdue) {
     const btnDefault = btn("Trigger Default", "btn-sm btn-red");
-    btnDefault.onclick = async () => txAction(btnDefault, async () => contract.triggerDefault(req.id));
+    btnDefault.onclick = async () => txAction(btnDefault, async () => {
+      const value = Number(collateralInfo.collateralType) === COLLATERAL_TYPE.NFT
+        ? collateralInfo.collateralEthValue
+        : 0n;
+      return contract.triggerDefault(req.id, { value });
+    });
     actions.appendChild(btnDefault);
   }
 
@@ -602,8 +807,11 @@ async function renderHistory() {
       const req = await contract.getLoanRequest(i);
       const s   = Number(req.status);
       if (s === STATUS.Repaid || s === STATUS.Defaulted) {
-        const loan = await contract.getActiveLoan(i);
-        done.push({ req, loan });
+        const [loan, collateralInfo] = await Promise.all([
+          contract.getActiveLoan(i),
+          contract.getLoanCollateralInfo(i),
+        ]);
+        done.push({ req, loan, collateralInfo });
       }
     }
 
@@ -626,10 +834,13 @@ async function renderHistory() {
     `;
     const tbody = list.querySelector("#history-tbody");
 
-    for (const { req, loan } of done) {
+    for (const { req, loan, collateralInfo } of done) {
       const isRepaid    = Number(req.status) === STATUS.Repaid;
       const badDebt     = loan.totalDue > loan.amountRepaid ? loan.totalDue - loan.amountRepaid : 0n;
-      const seized      = loan.collateralLocked ?? 0n;
+      const collateralType = Number(collateralInfo.collateralType);
+      const seized      = collateralType === COLLATERAL_TYPE.NFT
+        ? collateralInfo.collateralEthValue
+        : loan.collateralLocked ?? 0n;
       const debtCovered = seized > badDebt ? badDebt : seized;
       const excessToNonDefaulters = seized > badDebt ? seized - badDebt : 0n;
       const shortfall   = badDebt > seized ? badDebt - seized : 0n;
@@ -637,11 +848,15 @@ async function renderHistory() {
       let defaultNote;
       if (!isRepaid) {
         const parts = [`Loan unpaid: ${formatEth(badDebt)} ETH`];
-        parts.push(`Collateral seized: ${formatEth(seized)} ETH (covered ${formatEth(debtCovered)} of bad debt`);
+        let collateralNote = `${COLLATERAL_LABEL[collateralType]} collateral seized: ${formatEth(seized)} ETH (covered ${formatEth(debtCovered)} of bad debt`;
         if (excessToNonDefaulters > 0n) {
-          parts[parts.length - 1] += `; ${formatEth(excessToNonDefaulters)} excess to non-defaulting members)`;
+          collateralNote += `; ${formatEth(excessToNonDefaulters)} excess to non-defaulting members)`;
         } else {
-          parts[parts.length - 1] += `)`;
+          collateralNote += `)`;
+        }
+        parts.push(collateralNote);
+        if (collateralInfo.requiresGuarantor) {
+          parts.push(`Guarantor: ${truncateAddr(collateralInfo.guarantor)} (${formatEth(collateralInfo.guaranteeValue)} ETH locked at activation)`);
         }
         if (shortfall > 0n) {
           parts.push(`Socialized shortfall: ${formatEth(shortfall)} ETH`);
@@ -656,7 +871,11 @@ async function renderHistory() {
         <td class="mono">${formatEth(loan.principal)} ETH</td>
         <td class="mono">${formatEth(loan.interest)} ETH</td>
         <td class="mono">${formatEth(loan.amountRepaid)} ETH</td>
-        <td class="mono">${formatEth(loan.collateralLocked)} ETH</td>
+        <td class="mono">${
+          collateralType === COLLATERAL_TYPE.NFT
+            ? `${collateralInfo.nftId} (${formatEth(collateralInfo.collateralEthValue)} ETH)`
+            : `${formatEth(loan.collateralLocked)} ETH`
+        }</td>
         <td>
           ${isRepaid
             ? '<span class="chip chip-green">Repaid</span>'

@@ -241,6 +241,87 @@
       {
         "indexed": true,
         "internalType": "uint256",
+        "name": "requestId",
+        "type": "uint256"
+      },
+      {
+        "indexed": true,
+        "internalType": "address",
+        "name": "guarantor",
+        "type": "address"
+      },
+      {
+        "indexed": false,
+        "internalType": "uint256",
+        "name": "guaranteeRequired",
+        "type": "uint256"
+      }
+    ],
+    "name": "GuaranteeApproved",
+    "type": "event"
+  },
+  {
+    "anonymous": false,
+    "inputs": [
+      {
+        "indexed": true,
+        "internalType": "uint256",
+        "name": "loanId",
+        "type": "uint256"
+      },
+      {
+        "indexed": true,
+        "internalType": "address",
+        "name": "guarantor",
+        "type": "address"
+      },
+      {
+        "indexed": false,
+        "internalType": "uint256",
+        "name": "guaranteeValue",
+        "type": "uint256"
+      }
+    ],
+    "name": "GuaranteeUnlocked",
+    "type": "event"
+  },
+  {
+    "anonymous": false,
+    "inputs": [
+      {
+        "indexed": true,
+        "internalType": "uint256",
+        "name": "loanId",
+        "type": "uint256"
+      },
+      {
+        "indexed": true,
+        "internalType": "address",
+        "name": "guarantor",
+        "type": "address"
+      },
+      {
+        "indexed": false,
+        "internalType": "uint256",
+        "name": "sharesBurned",
+        "type": "uint256"
+      },
+      {
+        "indexed": false,
+        "internalType": "uint256",
+        "name": "valueCovered",
+        "type": "uint256"
+      }
+    ],
+    "name": "GuarantorSharesSeized",
+    "type": "event"
+  },
+  {
+    "anonymous": false,
+    "inputs": [
+      {
+        "indexed": true,
+        "internalType": "uint256",
         "name": "id",
         "type": "uint256"
       },
@@ -685,6 +766,41 @@
         "internalType": "enum CreditUnion.LoanTier",
         "name": "tier",
         "type": "uint8"
+      },
+      {
+        "internalType": "enum CreditUnion.CollateralType",
+        "name": "collateralType",
+        "type": "uint8"
+      },
+      {
+        "internalType": "uint256",
+        "name": "collateralEthValue",
+        "type": "uint256"
+      },
+      {
+        "internalType": "string",
+        "name": "nftId",
+        "type": "string"
+      },
+      {
+        "internalType": "address",
+        "name": "guarantor",
+        "type": "address"
+      },
+      {
+        "internalType": "bool",
+        "name": "requiresGuarantor",
+        "type": "bool"
+      },
+      {
+        "internalType": "uint256",
+        "name": "guaranteeLocked",
+        "type": "uint256"
+      },
+      {
+        "internalType": "uint256",
+        "name": "guaranteeAmount",
+        "type": "uint256"
       }
     ],
     "stateMutability": "view",
@@ -701,11 +817,53 @@
     "inputs": [
       {
         "internalType": "uint256",
+        "name": "requestId",
+        "type": "uint256"
+      }
+    ],
+    "name": "approveGuarantee",
+    "outputs": [],
+    "stateMutability": "nonpayable",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "uint256",
         "name": "",
         "type": "uint256"
       }
     ],
     "name": "collateralHeld",
+    "outputs": [
+      {
+        "internalType": "uint256",
+        "name": "",
+        "type": "uint256"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "address",
+        "name": "borrower",
+        "type": "address"
+      },
+      {
+        "internalType": "uint256",
+        "name": "amount",
+        "type": "uint256"
+      },
+      {
+        "internalType": "uint256",
+        "name": "duration",
+        "type": "uint256"
+      }
+    ],
+    "name": "computeNFTCollateralRequirement",
     "outputs": [
       {
         "internalType": "uint256",
@@ -907,6 +1065,41 @@
             "internalType": "enum CreditUnion.LoanTier",
             "name": "tier",
             "type": "uint8"
+          },
+          {
+            "internalType": "enum CreditUnion.CollateralType",
+            "name": "collateralType",
+            "type": "uint8"
+          },
+          {
+            "internalType": "uint256",
+            "name": "collateralEthValue",
+            "type": "uint256"
+          },
+          {
+            "internalType": "string",
+            "name": "nftId",
+            "type": "string"
+          },
+          {
+            "internalType": "address",
+            "name": "guarantor",
+            "type": "address"
+          },
+          {
+            "internalType": "bool",
+            "name": "requiresGuarantor",
+            "type": "bool"
+          },
+          {
+            "internalType": "uint256",
+            "name": "guaranteeLocked",
+            "type": "uint256"
+          },
+          {
+            "internalType": "uint256",
+            "name": "guaranteeAmount",
+            "type": "uint256"
           }
         ],
         "internalType": "struct CreditUnion.ActiveLoan",
@@ -1073,6 +1266,60 @@
         "type": "uint256"
       }
     ],
+    "name": "getLoanCollateralInfo",
+    "outputs": [
+      {
+        "internalType": "enum CreditUnion.CollateralType",
+        "name": "collateralType",
+        "type": "uint8"
+      },
+      {
+        "internalType": "uint256",
+        "name": "collateralLocked",
+        "type": "uint256"
+      },
+      {
+        "internalType": "uint256",
+        "name": "collateralEthValue",
+        "type": "uint256"
+      },
+      {
+        "internalType": "string",
+        "name": "nftId",
+        "type": "string"
+      },
+      {
+        "internalType": "address",
+        "name": "guarantor",
+        "type": "address"
+      },
+      {
+        "internalType": "bool",
+        "name": "requiresGuarantor",
+        "type": "bool"
+      },
+      {
+        "internalType": "bool",
+        "name": "guarantorApproved",
+        "type": "bool"
+      },
+      {
+        "internalType": "uint256",
+        "name": "guaranteeValue",
+        "type": "uint256"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "uint256",
+        "name": "id",
+        "type": "uint256"
+      }
+    ],
     "name": "getLoanRequest",
     "outputs": [
       {
@@ -1150,6 +1397,41 @@
           {
             "internalType": "uint256",
             "name": "approvalThresholdBps",
+            "type": "uint256"
+          },
+          {
+            "internalType": "enum CreditUnion.CollateralType",
+            "name": "collateralType",
+            "type": "uint8"
+          },
+          {
+            "internalType": "uint256",
+            "name": "collateralEthValue",
+            "type": "uint256"
+          },
+          {
+            "internalType": "string",
+            "name": "nftId",
+            "type": "string"
+          },
+          {
+            "internalType": "address",
+            "name": "guarantor",
+            "type": "address"
+          },
+          {
+            "internalType": "bool",
+            "name": "requiresGuarantor",
+            "type": "bool"
+          },
+          {
+            "internalType": "bool",
+            "name": "guarantorApproved",
+            "type": "bool"
+          },
+          {
+            "internalType": "uint256",
+            "name": "guaranteeRequired",
             "type": "uint256"
           }
         ],
@@ -1496,6 +1778,41 @@
         "internalType": "uint256",
         "name": "approvalThresholdBps",
         "type": "uint256"
+      },
+      {
+        "internalType": "enum CreditUnion.CollateralType",
+        "name": "collateralType",
+        "type": "uint8"
+      },
+      {
+        "internalType": "uint256",
+        "name": "collateralEthValue",
+        "type": "uint256"
+      },
+      {
+        "internalType": "string",
+        "name": "nftId",
+        "type": "string"
+      },
+      {
+        "internalType": "address",
+        "name": "guarantor",
+        "type": "address"
+      },
+      {
+        "internalType": "bool",
+        "name": "requiresGuarantor",
+        "type": "bool"
+      },
+      {
+        "internalType": "bool",
+        "name": "guarantorApproved",
+        "type": "bool"
+      },
+      {
+        "internalType": "uint256",
+        "name": "guaranteeRequired",
+        "type": "uint256"
       }
     ],
     "stateMutability": "view",
@@ -1520,6 +1837,25 @@
         "internalType": "bool",
         "name": "",
         "type": "bool"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "address",
+        "name": "",
+        "type": "address"
+      }
+    ],
+    "name": "lockedGuarantorValueEth",
+    "outputs": [
+      {
+        "internalType": "uint256",
+        "name": "",
+        "type": "uint256"
       }
     ],
     "stateMutability": "view",
@@ -1701,6 +2037,26 @@
         "internalType": "uint256",
         "name": "collateralOffered",
         "type": "uint256"
+      },
+      {
+        "internalType": "enum CreditUnion.CollateralType",
+        "name": "collateralType",
+        "type": "uint8"
+      },
+      {
+        "internalType": "uint256",
+        "name": "collateralEthValue",
+        "type": "uint256"
+      },
+      {
+        "internalType": "string",
+        "name": "nftId",
+        "type": "string"
+      },
+      {
+        "internalType": "address",
+        "name": "proposedGuarantor",
+        "type": "address"
       }
     ],
     "name": "requestLoan",
@@ -1808,7 +2164,7 @@
     ],
     "name": "triggerDefault",
     "outputs": [],
-    "stateMutability": "nonpayable",
+    "stateMutability": "payable",
     "type": "function"
   },
   {

@@ -62,8 +62,14 @@ creditUnion.connect(acct1).requestLoan(
     100 ether,      // amount
     1075,           // 10.75% in bps
     30 * 86400,     // 30 days
-    40 ether        // collateralOffered (just above minimum)
+    40 ether,       // collateralOffered (just above minimum)
+    0,              // collateralType = ETH
+    0,              // collateralEthValue (ETH collateral uses 0)
+    "",             // nftId
+    acct0           // proposedGuarantor; required because 40 < 100 principal
 );
+
+creditUnion.connect(acct0).approveGuarantee(1);
 ```
 
 ### Tier classification
@@ -190,10 +196,11 @@ acct1's net cost of borrowing 100 ETH for 28 days: **0.663 ETH**. They had +60 n
 
 ---
 
-# Case 2 — Normal Collateral → Defaulted (the strategic-default problem)
+# Case 2 — Normal Collateral + Guarantor → Defaulted
 
 **Borrower:** acct1
-**Story:** Same request as Case 1 — 100 ETH, 40 collateral. But this time acct1 walks away. **The deliberately thin collateral (just barely above the threshold) makes this scenario interesting:** there's no excess for the share-burn mechanic to redistribute, so the contract falls back on socialized loss. And as we'll see, the threshold the contract calculated isn't enough to make default unprofitable for the borrower — they end up *ahead*.
+**Guarantor:** acct0
+**Story:** Same request as Case 1 — 100 ETH, 40 ETH borrower collateral. Because the borrower collateral is below 100% of principal, acct0 must explicitly approve a 60 ETH guarantee during the same 3-day vote window. This time acct1 walks away, so the borrower collateral is seized first and acct0's locked guarantee absorbs most of the remaining shortfall.
 
 Steps 2.1 through 2.4 are identical to Case 1. We pick up at the activation:
 
@@ -227,9 +234,18 @@ totalShares:   2,000 (unchanged — no share burn because excess = 0)
 acct1 shares:  500 (unchanged)
 ```
 
-**Phase 2 — Share burn skipped** (because excess = 0).
+**Phase 2 — Borrower excess share burn skipped** (because excess = 0).
 
-**Phase 3 — Keeper bounty**:
+**Phase 3 — Guarantor shares seized**:
+```
+guaranteeLocked = 60
+remainingBadDebt: 60.884 → 0.884
+acct0 shares burned: ≈61.856 shares at the current share price
+totalShares: 2,000 → 1,938.144
+lockedGuarantorValueEth[acct0]: 60 → 0
+```
+
+**Phase 4 — Keeper bounty**:
 ```
 bounty = min(100.884 × 0.01, 100 × 0.02) = 1.009 ETH
 totalPoolETH: 1,940 → 1,938.991
@@ -241,46 +257,36 @@ acct3 wallet: 10,000 → 10,001.01
 | State | After default |
 |---|---|
 | `totalPoolETH` | **1,938.991** (started 2,000, net loss of 61.009) |
-| `totalShares` | **2,000** (no burns) |
+| `totalShares` | **1,938.144** (guarantor shares burned) |
 | `acct1` shares | **500** (unchanged) |
 | `acct1` wallet | **9,560** (untouched — keeps the 100 they borrowed) |
+| `acct0` guarantee locked | **0** (released after seizure) |
 | `acct3` wallet | **10,001.01** (keeper bounty) |
 | `hasDefaulted[acct1]` | `true` (permanent flag) |
 | `totalDefaulted[acct1]` | `100.884` |
 
-### Member values after default — losses socialized proportionally
+### Member values after default
 
 | Account | Pre-loan value | After default | Net change |
 |---|---|---|---|
-| acct0 (50%) | 1,000 | 1,000 × 1,938.991 / 2,000 = **969.50** | **−30.50** |
-| acct1 (25%) | 500 | 500 × 1,938.991 / 2,000 = **484.75** | **−15.25** |
-| acct2 (25%) | 500 | 500 × 1,938.991 / 2,000 = **484.75** | **−15.25** |
+| acct0 (guarantor) | 1,000 | 938.144 × 1,938.991 / 1,938.144 = **938.55** | **−61.45** |
+| acct1 (defaulter) | 500 | 500 × 1,938.991 / 1,938.144 = **500.22** | **+0.22** |
+| acct2 | 500 | 500 × 1,938.991 / 1,938.144 = **500.22** | **+0.22** |
 
-Total pool-value loss: 30.50 + 15.25 + 15.25 = **61.00** ≈ 60.884 bad-debt + 1.009 bounty − rounding ✓
+The pool still paid a bounty and still has a small uncovered interest shortfall, but the guarantor absorbed almost all of the principal shortfall that used to be socialized.
 
 ### Economic outcomes (Case 2)
 
 | Party | Net change vs pre-loan |
 |---|---|
-| **acct1** (defaulter) | wallet **+60** (kept the 100 loan, paid 40 collateral); pool **−15.25**; net **+44.75 ETH ahead** ⚠️ |
-| **acct0** | pool **−30.50** |
-| **acct2** | pool **−15.25** |
+| **acct1** (defaulter) | wallet **+60** (kept the 100 loan, paid 40 collateral); pool slightly up from guarantor seizure; permanently marked defaulted |
+| **acct0** (guarantor) | pool **−61.45** from guarantee seizure |
+| **acct2** | pool roughly flat/slightly up because acct0's seized shares are redistributed |
 | **acct3** (keeper) | wallet **+1.01** |
 
-### ⚠️ The strategic-default problem
+### What changed vs the old under-collateralized model
 
-acct1 walked away from the loan and ended up **+44.75 ETH richer** than where they started. They lost their 40 ETH collateral and took a 15.25 ETH hit to their pool stake, but they kept the entire 100 ETH principal — net positive. The honest members (acct0, acct2) collectively lost 45.75 ETH to subsidize this.
-
-**Why this happens:** the contract's collateral threshold (36.25 ETH) is too low to prevent strategic default. When `collateral < principal`, walking away is profitable by `principal − collateral − borrower's_share_of_socialized_loss`. The share-burn mechanic only activates when `seized > badDebt`, so under-collateralized defaults bypass it entirely.
-
-**What protects the pool from this in practice:**
-1. **Voting filter.** Members can refuse to approve loans they think will default. In Case 1 acct0 voted yes because they trusted acct1; if acct1 looked sketchy, the vote would fail and the loan wouldn't activate.
-2. **Reputation flag.** `hasDefaulted[acct1] = true` is permanent. They're barred from Trust tier forever, and any future loan request will reveal the prior default — other members can vote no. But a strategic attacker can simply spin up a new wallet.
-3. **Sybil resistance via tenure.** New wallets have zero voting weight for the first 30 days and can't request Trust loans without proven repayment history. This slows down repeat strategic defaults but doesn't stop a patient attacker.
-
-**The fix the contract is missing:** collateral threshold should be `≥ principal + interest` to make default strictly unprofitable in a single-loan-isolated sense. The current threshold of 36.25 on a 100 loan is *under*-collateralized by design (Standard base is 40% of principal). The contract relies on social filtering (the vote) and reputation cost to bridge the gap. **For a high-trust community this is workable; for an anonymous adversarial setting it is not.**
-
-This is the deeper reason Case 3 (over-collateralization) matters — that's the only configuration where the math itself prevents strategic profit.
+The pool no longer absorbs the full 60.884 ETH shortfall from a 40%-collateral loan. Instead, the nominated guarantor explicitly opted into that liability before approval and their shares are locked at activation. This does not make borrower default impossible, but it moves the risk from passive pool members to a consenting co-signer and makes under-100% ETH loans socially accountable.
 
 ---
 
@@ -300,7 +306,11 @@ creditUnion.connect(acct0).requestLoan(
     100 ether,      // amount
     1075,           // 10.75% in bps
     30 * 86400,     // 30 days
-    250 ether       // collateralOffered (~7.7× minimum)
+    250 ether,      // collateralOffered (~7.7× minimum)
+    0,              // collateralType = ETH
+    0,              // collateralEthValue
+    "",             // nftId
+    address(0)      // no guarantor needed because collateral >= principal
 );
 ```
 

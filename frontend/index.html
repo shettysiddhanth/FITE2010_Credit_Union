@@ -90,6 +90,12 @@
           <button id="btn-advance-time" class="btn-amber">Advance Time</button>
           <span style="font-size:12px;color:var(--muted)">days (≥31 unlocks voting weight)</span>
         </div>
+        <hr style="border-color:var(--border);margin:14px 0">
+        <div class="form-row">
+          <select id="dev-nft-select" style="max-width:320px"></select>
+          <button id="btn-clear-nft" class="btn-ghost">Clear NFT</button>
+        </div>
+        <p class="hint">Selected NFT: <span class="mono" id="selected-nft-detail">No NFT selected</span></p>
       </div>
     </section>
 
@@ -103,8 +109,20 @@
           <label>Amount (ETH)<input type="number" id="req-amount" placeholder="0.5" step="0.01" /></label>
           <label>Interest Rate (%)<input type="number" id="req-rate" placeholder="8.0" step="0.1" /></label>
           <label>Duration (days)<input type="number" id="req-duration" placeholder="30" /></label>
+          <label>Collateral Type
+            <select id="req-collateral-type">
+              <option value="0">ETH</option>
+              <option value="1">NFT</option>
+            </select>
+          </label>
           <label>Collateral to Offer (ETH)<input type="number" id="req-collateral" placeholder="0.00" step="0.001" /></label>
+          <label id="guarantor-field" class="hidden">Guarantor
+            <select id="req-guarantor">
+              <option value="">Select guarantor</option>
+            </select>
+          </label>
         </div>
+        <div id="nft-loan-preview" class="tier-preview hidden"></div>
         <div class="tier-preview hidden" id="tier-preview">
           <span id="tier-badge" class="tier-badge">—</span>
           <span>Min Rate: <strong class="mono" id="tier-thresh-rate">—</strong></span>
@@ -262,17 +280,37 @@
           <strong>Submit a request</strong> — Fill in Amount (ETH), Interest Rate (%), Duration (days), and Collateral to Offer (ETH), then click Submit. The form previews your tier, the minimum rate and collateral required for your loan, and whether your offering qualifies for an approval boost. You must be a member with no active loan.
         </div></div>
         <div class="guide-step"><span class="guide-step-num">2</span><div>
-          <strong>Voting window (3 days)</strong> — Other members vote Yes or No. The borrower cannot vote on their own request, and the borrower's weight is excluded from the denominator so they aren't a forced "no" against themselves. Members with zero voting weight (tenure &lt; 30 days) cannot vote. Abstentions by other members still count against approval — the threshold is applied against the <em>eligible</em> voting weight (everyone except the borrower).
+          <strong>Choose collateral</strong> — ETH collateral is liquid and locked at activation. NFT collateral uses the NFT selected in Dev Tools and must meet the higher NFT valuation requirement. ETH collateral below 100% of principal requires a guarantor.
         </div></div>
         <div class="guide-step"><span class="guide-step-num">3</span><div>
-          <strong>Finalize</strong> — After the 3-day window closes, anyone can click Finalize. Votes are counted using each voter's <em>current</em> weight at finalization time (not the weight they had when they cast). The required majority depends on loan duration and whether the borrower offered a boost (see Approval Thresholds below).
+          <strong>Voting window (3 days)</strong> — Other members vote Yes or No. The borrower cannot vote on their own request, and the borrower's weight is excluded from the denominator so they aren't a forced "no" against themselves. Members with zero voting weight (tenure &lt; 30 days) cannot vote. Abstentions by other members still count against approval — the threshold is applied against the <em>eligible</em> voting weight (everyone except the borrower).
         </div></div>
         <div class="guide-step"><span class="guide-step-num">4</span><div>
+          <strong>Guarantee approval</strong> — If a guarantor is required, the nominated guarantor must click Approve Guarantee before the same 3-day vote window closes. Voting can proceed while approval is pending, but finalization rejects the loan if approval is missing.
+        </div></div>
+        <div class="guide-step"><span class="guide-step-num">5</span><div>
+          <strong>Finalize</strong> — After the 3-day window closes, anyone can click Finalize. Votes are counted using each voter's <em>current</em> weight at finalization time (not the weight they had when they cast). The required majority depends on loan duration and whether the borrower offered a boost (see Approval Thresholds below).
+        </div></div>
+        <div class="guide-step"><span class="guide-step-num">6</span><div>
           <strong>Activate</strong> — The borrower has <strong>7 days</strong> to activate an approved loan. At activation they lock their committed collateral ETH; the principal is disbursed immediately.
           <strong>Important:</strong> tier is re-evaluated at activation against the <em>current</em> pool size. If the pool has shrunk since the vote, the tier may escalate and a higher collateral is required. Tier only ever escalates — it never drops to a lower tier.
         </div></div>
 
         <p class="guide-desc" style="margin-top:12px"><strong>Note:</strong> On a fresh local node, advance chain time by 31 days before submitting requests, otherwise no member will have voting weight and the request will revert.</p>
+      </div>
+
+      <!-- Dual Collateral -->
+      <div class="card">
+        <h3>Collateral Types: ETH vs NFT</h3>
+        <p class="guide-desc">
+          ETH is the only asset that counts as pool liquidity. NFT collateral is trusted demo valuation metadata selected from Dev Tools; it does not increase <code>totalPoolETH</code> before a default.
+        </p>
+        <ul class="guide-list">
+          <li><strong>ETH collateral</strong> — Must meet the normal dynamic threshold. If it is below 100% of principal, the borrower must nominate a guarantor who explicitly approves during the loan vote window.</li>
+          <li><strong>NFT collateral</strong> — Requires the normal dynamic threshold plus 100% of principal. For example, a 45% dynamic threshold becomes a 145% NFT valuation requirement.</li>
+          <li><strong>Guarantors</strong> — Approved guarantor share value is locked at activation and cannot be withdrawn until repayment or default. On default, guarantor shares can be burned to cover borrower shortfall.</li>
+          <li><strong>NFT default</strong> — The NFT is treated as liquidated at its stored valuation. In the local demo, the default caller sends that valuation as ETH with the transaction so recovered value really enters the pool. Excess is redirected away from the defaulter through the same punitive share-burn rule used for ETH collateral.</li>
+        </ul>
       </div>
 
       <!-- Loan Tiers -->

@@ -14,6 +14,8 @@ const ONE_MONTH = 30 * ONE_DAY;
 const STATUS = { Pending: 0n, Approved: 1n, Rejected: 2n, Active: 3n, Repaid: 4n, Defaulted: 5n };
 // LoanTier enum values    (Trust=0, Standard=1, Secured=2)
 const TIER   = { Trust: 0n, Standard: 1n, Secured: 2n };
+// CollateralType enum values (ETH=0, NFT=1)
+const COLLATERAL = { ETH: 0, NFT: 1 };
 // GovParamType enum values (MaxLoanSize=0, MinInterestRate=1, KeeperBountyRate=2, Unpause=3, TransferTreasurer=4)
 const PARAM  = { MaxLoanSize: 0n, MinInterestRate: 1n, KeeperBountyRate: 2n, Unpause: 3n, TransferTreasurer: 4n };
 // GovStatus enum values   (Pending=0, Approved=1, Rejected=2, Executed=3, Vetoed=4)
@@ -36,6 +38,40 @@ async function joinAndWait(cu, signer, value = E(2)) {
   await time.increase(ONE_MONTH + ONE_DAY);
 }
 
+function fullEthCollateral(amount, collateralOffered) {
+  return collateralOffered < amount ? amount : collateralOffered;
+}
+
+function requestLoan(
+  cu,
+  borrower,
+  amount,
+  interestRate,
+  duration,
+  collateralOffered,
+  {
+    collateralType = COLLATERAL.ETH,
+    collateralEthValue = 0n,
+    nftId = "",
+    guarantor = ethers.ZeroAddress,
+    preserveCollateral = false,
+  } = {}
+) {
+  if (collateralType === COLLATERAL.ETH && guarantor === ethers.ZeroAddress && !preserveCollateral) {
+    collateralOffered = fullEthCollateral(amount, collateralOffered);
+  }
+  return cu.connect(borrower).requestLoan(
+    amount,
+    interestRate,
+    duration,
+    collateralOffered,
+    collateralType,
+    collateralEthValue,
+    nftId,
+    guarantor
+  );
+}
+
 // Full lifecycle: request → vote (alice votes for) → finalize → activate → get loan id
 async function openLoan(
   cu,
@@ -46,10 +82,10 @@ async function openLoan(
   // Compute thresholds so we always satisfy requirements
   const [threshRate, threshCollat] = await cu.computeThresholds(borrower.address, amount, duration);
   const useRate = rate > threshRate ? rate : threshRate;
-  // Offer 110% of threshold collateral to ensure we clear the floor
-  const collateralOffered = threshCollat * 110n / 100n;
+  // Offer at least full principal coverage unless a test explicitly exercises guarantors.
+  const collateralOffered = fullEthCollateral(amount, threshCollat * 110n / 100n);
 
-  const tx  = await cu.connect(borrower).requestLoan(amount, useRate, duration, collateralOffered);
+  const tx  = await requestLoan(cu, borrower, amount, useRate, duration, collateralOffered);
   const rc  = await tx.wait();
   const id  = rc.logs.find((l) => l.fragment?.name === "LoanRequested").args[0];
 
@@ -263,7 +299,7 @@ describe("CreditUnion", function () {
       // 2% of 10 ETH = 0.2 ETH, duration ≤ 30 days
       const [threshRate, threshCollat] = await cu.computeThresholds(alice.address, E(0.1), 7 * ONE_DAY);
       const collateralOffered = threshCollat * 110n / 100n;
-      const tx = await cu.connect(alice).requestLoan(E(0.1), threshRate, 7 * ONE_DAY, collateralOffered);
+      const tx = await requestLoan(cu, alice, E(0.1), threshRate, 7 * ONE_DAY, collateralOffered);
       const rc = await tx.wait();
       const ev = rc.logs.find((l) => l.fragment?.name === "LoanRequested");
       expect(ev.args[3]).to.equal(TIER.Trust);
@@ -277,7 +313,7 @@ describe("CreditUnion", function () {
       // 5% of 12 ETH = 0.6 ETH > Standard threshold (10% = 1.2 ETH), duration 45 days (≤90 days)
       const [threshRate, threshCollat] = await cu.computeThresholds(alice.address, E(0.5), 45 * ONE_DAY);
       const collateralOffered = threshCollat * 110n / 100n;
-      const tx = await cu.connect(alice).requestLoan(E(0.5), threshRate, 45 * ONE_DAY, collateralOffered);
+      const tx = await requestLoan(cu, alice, E(0.5), threshRate, 45 * ONE_DAY, collateralOffered);
       const rc = await tx.wait();
       const ev = rc.logs.find((l) => l.fragment?.name === "LoanRequested");
       expect(ev.args[3]).to.equal(TIER.Standard);
@@ -293,7 +329,7 @@ describe("CreditUnion", function () {
       // 15% of 20 ETH = 3 ETH — exceeds 10% Standard threshold
       const [threshRate, threshCollat] = await cu.computeThresholds(alice.address, E(3), 7 * ONE_DAY);
       const collateralOffered = threshCollat * 110n / 100n;
-      const tx = await cu.connect(alice).requestLoan(E(3), threshRate, 7 * ONE_DAY, collateralOffered);
+      const tx = await requestLoan(cu, alice, E(3), threshRate, 7 * ONE_DAY, collateralOffered);
       const rc = await tx.wait();
       const ev = rc.logs.find((l) => l.fragment?.name === "LoanRequested");
       expect(ev.args[3]).to.equal(TIER.Secured);
@@ -325,7 +361,7 @@ describe("CreditUnion", function () {
 
       // alice now tries a Trust tier loan — should fail due to prior default
       const [threshRate2, threshCollat2] = await cu.computeThresholds(alice.address, E(0.1), 7 * ONE_DAY);
-      await expect(cu.connect(alice).requestLoan(E(0.1), threshRate2, 7 * ONE_DAY, threshCollat2))
+      await expect(requestLoan(cu, alice, E(0.1), threshRate2, 7 * ONE_DAY, threshCollat2))
         .to.be.revertedWith("Prior default disqualifies Trust tier");
     });
 
@@ -337,7 +373,7 @@ describe("CreditUnion", function () {
       await time.increase(15 * ONE_DAY);
 
       const [threshRate, threshCollat] = await cu.computeThresholds(alice.address, E(0.1), 7 * ONE_DAY);
-      await expect(cu.connect(alice).requestLoan(E(0.1), threshRate, 7 * ONE_DAY, threshCollat))
+      await expect(requestLoan(cu, alice, E(0.1), threshRate, 7 * ONE_DAY, threshCollat))
         .to.be.revertedWith("Not yet eligible for Trust tier");
     });
 
@@ -349,7 +385,7 @@ describe("CreditUnion", function () {
       // Should not revert for Trust tier request
       const [threshRate, threshCollat] = await cu.computeThresholds(alice.address, E(0.1), 7 * ONE_DAY);
       const collateralOffered = threshCollat * 110n / 100n;
-      await expect(cu.connect(alice).requestLoan(E(0.1), threshRate, 7 * ONE_DAY, collateralOffered))
+      await expect(requestLoan(cu, alice, E(0.1), threshRate, 7 * ONE_DAY, collateralOffered))
         .to.emit(cu, "LoanRequested");
     });
   });
@@ -359,7 +395,7 @@ describe("CreditUnion", function () {
   describe("requestLoan() — common validations", function () {
     it("reverts if not a member", async function () {
       const { cu, alice } = await deploy();
-      await expect(cu.connect(alice).requestLoan(E(1), 1000, 7 * ONE_DAY, E(1)))
+      await expect(requestLoan(cu, alice, E(1), 1000, 7 * ONE_DAY, E(1)))
         .to.be.revertedWith("Not a member");
     });
 
@@ -373,7 +409,7 @@ describe("CreditUnion", function () {
       await cu.connect(alice).activateLoan(loanId, { value: req.collateralOffered });
 
       const [threshRate, threshCollat] = await cu.computeThresholds(alice.address, E(0.1), 7 * ONE_DAY);
-      await expect(cu.connect(alice).requestLoan(E(0.1), threshRate, 7 * ONE_DAY, threshCollat))
+      await expect(requestLoan(cu, alice, E(0.1), threshRate, 7 * ONE_DAY, threshCollat))
         .to.be.revertedWith("Active loan outstanding");
     });
 
@@ -383,7 +419,7 @@ describe("CreditUnion", function () {
       await joinAndWait(cu, bob, E(10));
 
       // Use a high rate and high collateral so only the pool cap check triggers
-      await expect(cu.connect(alice).requestLoan(E(4), 2000, 7 * ONE_DAY, E(10)))
+      await expect(requestLoan(cu, alice, E(4), 2000, 7 * ONE_DAY, E(10)))
         .to.be.revertedWith("Exceeds 20% pool cap");
     });
 
@@ -393,7 +429,7 @@ describe("CreditUnion", function () {
       await joinAndWait(cu, bob, E(10));
 
       const [threshRate,] = await cu.computeThresholds(alice.address, E(0.5), 7 * ONE_DAY);
-      await expect(cu.connect(alice).requestLoan(E(0.5), threshRate - 1n, 7 * ONE_DAY, E(1)))
+      await expect(requestLoan(cu, alice, E(0.5), threshRate - 1n, 7 * ONE_DAY, E(1)))
         .to.be.revertedWith("Rate below risk threshold");
     });
 
@@ -411,7 +447,7 @@ describe("CreditUnion", function () {
         await cu.computeThresholds(alice.address, principal, duration);
 
       await expect(
-        cu.connect(alice).requestLoan(principal, threshRate, duration, threshCollat * 110n / 100n)
+        requestLoan(cu, alice, principal, threshRate, duration, threshCollat * 110n / 100n)
       ).to.be.revertedWith("No eligible voting weight");
     });
   });
@@ -426,7 +462,7 @@ describe("CreditUnion", function () {
 
       const [threshRate, threshCollat] = await cu.computeThresholds(alice.address, E(0.5), 7 * ONE_DAY);
       const collateralOffered = threshCollat * 110n / 100n;
-      const tx = await cu.connect(alice).requestLoan(E(0.5), threshRate, 7 * ONE_DAY, collateralOffered);
+      const tx = await requestLoan(cu, alice, E(0.5), threshRate, 7 * ONE_DAY, collateralOffered);
       const rc = await tx.wait();
       const id = rc.logs.find((l) => l.fragment?.name === "LoanRequested").args[0];
 
@@ -442,7 +478,7 @@ describe("CreditUnion", function () {
 
       const [threshRate, threshCollat] = await cu.computeThresholds(alice.address, E(0.5), 7 * ONE_DAY);
       const collateralOffered = threshCollat * 110n / 100n;
-      const tx = await cu.connect(alice).requestLoan(E(0.5), threshRate, 7 * ONE_DAY, collateralOffered);
+      const tx = await requestLoan(cu, alice, E(0.5), threshRate, 7 * ONE_DAY, collateralOffered);
       const id = (await tx.wait()).logs.find((l) => l.fragment?.name === "LoanRequested").args[0];
 
       await cu.connect(bob).vote(id, true);
@@ -457,7 +493,7 @@ describe("CreditUnion", function () {
 
       const [threshRate, threshCollat] = await cu.computeThresholds(alice.address, E(0.5), 7 * ONE_DAY);
       const collateralOffered = threshCollat * 110n / 100n;
-      const tx = await cu.connect(alice).requestLoan(E(0.5), threshRate, 7 * ONE_DAY, collateralOffered);
+      const tx = await requestLoan(cu, alice, E(0.5), threshRate, 7 * ONE_DAY, collateralOffered);
       const id = (await tx.wait()).logs.find((l) => l.fragment?.name === "LoanRequested").args[0];
 
       await time.increase(3 * ONE_DAY + 1);
@@ -472,7 +508,7 @@ describe("CreditUnion", function () {
 
       const [threshRate, threshCollat] = await cu.computeThresholds(alice.address, E(0.5), 7 * ONE_DAY);
       const collateralOffered = threshCollat * 110n / 100n;
-      const tx = await cu.connect(alice).requestLoan(E(0.5), threshRate, 7 * ONE_DAY, collateralOffered);
+      const tx = await requestLoan(cu, alice, E(0.5), threshRate, 7 * ONE_DAY, collateralOffered);
       const id = (await tx.wait()).logs.find((l) => l.fragment?.name === "LoanRequested").args[0];
 
       await expect(cu.connect(alice).vote(id, true))
@@ -490,7 +526,7 @@ describe("CreditUnion", function () {
 
       const [threshRate, threshCollat] = await cu.computeThresholds(alice.address, E(0.5), 7 * ONE_DAY);
       const collateralOffered = threshCollat * 110n / 100n;
-      const tx = await cu.connect(alice).requestLoan(E(0.5), threshRate, 7 * ONE_DAY, collateralOffered);
+      const tx = await requestLoan(cu, alice, E(0.5), threshRate, 7 * ONE_DAY, collateralOffered);
       const id = (await tx.wait()).logs.find((l) => l.fragment?.name === "LoanRequested").args[0];
 
       await cu.connect(bob).vote(id, true);
@@ -513,7 +549,7 @@ describe("CreditUnion", function () {
 
       const [threshRate, threshCollat] = await cu.computeThresholds(alice.address, E(0.5), 7 * ONE_DAY);
       const collateralOffered = threshCollat * 110n / 100n;
-      const tx = await cu.connect(alice).requestLoan(E(0.5), threshRate, 7 * ONE_DAY, collateralOffered);
+      const tx = await requestLoan(cu, alice, E(0.5), threshRate, 7 * ONE_DAY, collateralOffered);
       const id = (await tx.wait()).logs.find((l) => l.fragment?.name === "LoanRequested").args[0];
 
       // bob votes against — no one votes for; total snapshot includes alice's weight too
@@ -640,7 +676,7 @@ describe("CreditUnion", function () {
       // Should be able to request another loan
       const [threshRate2, threshCollat2] = await cu.computeThresholds(alice.address, E(0.1), 7 * ONE_DAY);
       const collateralOffered2 = threshCollat2 * 110n / 100n;
-      await expect(cu.connect(alice).requestLoan(E(0.1), threshRate2, 7 * ONE_DAY, collateralOffered2))
+      await expect(requestLoan(cu, alice, E(0.1), threshRate2, 7 * ONE_DAY, collateralOffered2))
         .to.emit(cu, "LoanRequested");
     });
   });
@@ -825,7 +861,7 @@ describe("CreditUnion", function () {
       const collateralOffered = E(2);
       expect(collateralOffered).to.be.gt(threshCollat);
 
-      await cu.connect(alice).requestLoan(principal, threshRate, duration, collateralOffered);
+      await requestLoan(cu, alice, principal, threshRate, duration, collateralOffered);
       const reqId = await cu.loanCounter();
       await cu.connect(bob).vote(reqId, true);
       await time.increase(3 * ONE_DAY + 1);
@@ -965,7 +1001,7 @@ describe("CreditUnion", function () {
       await joinAndWait(cu, alice, E(2));
       await joinAndWait(cu, bob, E(10));
       await cu.connect(treasurer).emergencyPause();
-      await expect(cu.connect(alice).requestLoan(E(0.5), 1000, 7 * ONE_DAY, E(1)))
+      await expect(requestLoan(cu, alice, E(0.5), 1000, 7 * ONE_DAY, E(1)))
         .to.be.revertedWith("Contract is paused");
     });
 
@@ -1283,7 +1319,233 @@ describe("CreditUnion", function () {
     });
   });
 
-  // ── 25. Edge cases ────────────────────────────────────────────
+  // ── 25. Guarantors ────────────────────────────────────────────
+
+  describe("guarantor-backed ETH loans", function () {
+    it("requires a proposed guarantor for ETH collateral below principal", async function () {
+      const { cu, alice, bob } = await deploy();
+      await joinAndWait(cu, alice, E(2));
+      await joinAndWait(cu, bob, E(10));
+
+      const amount = E(1);
+      const [rate, collat] = await cu.computeThresholds(alice.address, amount, 7 * ONE_DAY);
+      await expect(requestLoan(cu, alice, amount, rate, 7 * ONE_DAY, collat, { preserveCollateral: true }))
+        .to.be.revertedWith("Guarantor required");
+    });
+
+    it("requires explicit approval before finalization", async function () {
+      const { cu, alice, bob } = await deploy();
+      await joinAndWait(cu, alice, E(2));
+      await joinAndWait(cu, bob, E(10));
+
+      const amount = E(1);
+      const [rate, collat] = await cu.computeThresholds(alice.address, amount, 7 * ONE_DAY);
+      await requestLoan(cu, alice, amount, rate, 7 * ONE_DAY, collat, {
+        guarantor: bob.address,
+        preserveCollateral: true,
+      });
+      const id = await cu.loanCounter();
+      await cu.connect(bob).vote(id, true);
+      await time.increase(3 * ONE_DAY + 1);
+
+      await expect(cu.finalizeLoan(id)).to.emit(cu, "LoanRejected").withArgs(id);
+      expect((await cu.getLoanRequest(id)).status).to.equal(STATUS.Rejected);
+    });
+
+    it("approves, locks on activation, unlocks on repayment, and blocks locked withdrawals", async function () {
+      const { cu, alice, bob } = await deploy();
+      await joinAndWait(cu, alice, E(2));
+      await joinAndWait(cu, bob, E(10));
+
+      const amount = E(1);
+      const [rate, collat] = await cu.computeThresholds(alice.address, amount, 7 * ONE_DAY);
+      await requestLoan(cu, alice, amount, rate, 7 * ONE_DAY, collat, {
+        guarantor: bob.address,
+        preserveCollateral: true,
+      });
+      const id = await cu.loanCounter();
+      const shortfall = amount - collat;
+
+      await expect(cu.connect(bob).approveGuarantee(id))
+        .to.emit(cu, "GuaranteeApproved")
+        .withArgs(id, bob.address, shortfall);
+      await cu.connect(bob).vote(id, true);
+      await time.increase(3 * ONE_DAY + 1);
+      await cu.finalizeLoan(id);
+      await cu.connect(alice).activateLoan(id, { value: collat });
+
+      expect(await cu.lockedGuarantorValueEth(bob.address)).to.equal(shortfall);
+      const bobShares = (await cu.members(bob.address)).shares;
+      await expect(cu.connect(bob).withdraw(bobShares))
+        .to.be.revertedWith("Shares locked as loan guarantee");
+
+      const totalDue = (await cu.getActiveLoan(id)).totalDue;
+      await expect(cu.connect(alice).repay(id, { value: totalDue }))
+        .to.emit(cu, "GuaranteeUnlocked")
+        .withArgs(id, bob.address, shortfall);
+      expect(await cu.lockedGuarantorValueEth(bob.address)).to.equal(0n);
+    });
+
+    it("rejects invalid and late guarantor approvals", async function () {
+      const { cu, alice, bob, carol } = await deploy();
+      await joinAndWait(cu, alice, E(2));
+      await joinAndWait(cu, bob, E(10));
+      await joinAndWait(cu, carol, E(1));
+
+      const amount = E(1);
+      const [rate, collat] = await cu.computeThresholds(alice.address, amount, 7 * ONE_DAY);
+      await expect(requestLoan(cu, alice, amount, rate, 7 * ONE_DAY, collat, {
+        guarantor: alice.address,
+        preserveCollateral: true,
+      })).to.be.revertedWith("Guarantor cannot be borrower");
+
+      await requestLoan(cu, alice, amount, rate, 7 * ONE_DAY, collat, {
+        guarantor: bob.address,
+        preserveCollateral: true,
+      });
+      const id = await cu.loanCounter();
+      await expect(cu.connect(carol).approveGuarantee(id)).to.be.revertedWith("Not proposed guarantor");
+      await time.increase(3 * ONE_DAY + 1);
+      await expect(cu.connect(bob).approveGuarantee(id)).to.be.revertedWith("Guarantee approval closed");
+    });
+
+    it("burns guarantor shares on default after borrower collateral is exhausted", async function () {
+      const { cu, alice, bob, keeper } = await deploy();
+      await joinAndWait(cu, alice, E(2));
+      await joinAndWait(cu, bob, E(10));
+
+      const amount = E(1);
+      const [rate, collat] = await cu.computeThresholds(alice.address, amount, 7 * ONE_DAY);
+      await requestLoan(cu, alice, amount, rate, 7 * ONE_DAY, collat, {
+        guarantor: bob.address,
+        preserveCollateral: true,
+      });
+      const id = await cu.loanCounter();
+      await cu.connect(bob).approveGuarantee(id);
+      await cu.connect(bob).vote(id, true);
+      await time.increase(3 * ONE_DAY + 1);
+      await cu.finalizeLoan(id);
+      await cu.connect(alice).activateLoan(id, { value: collat });
+
+      const bobSharesBefore = (await cu.members(bob.address)).shares;
+      await time.increase(8 * ONE_DAY);
+      await expect(cu.connect(keeper).triggerDefault(id)).to.emit(cu, "GuarantorSharesSeized");
+      expect((await cu.members(bob.address)).shares).to.be.lt(bobSharesBefore);
+      expect(await cu.lockedGuarantorValueEth(bob.address)).to.equal(0n);
+    });
+  });
+
+  // ── 26. NFT collateral ────────────────────────────────────────
+
+  describe("NFT-backed loans", function () {
+    it("accepts sufficient NFT valuation and rejects low valuation", async function () {
+      const { cu, alice, bob } = await deploy();
+      await joinAndWait(cu, alice, E(2));
+      await joinAndWait(cu, bob, E(10));
+
+      const amount = E(1);
+      const duration = 7 * ONE_DAY;
+      const [rate] = await cu.computeThresholds(alice.address, amount, duration);
+      const nftRequirement = await cu.computeNFTCollateralRequirement(alice.address, amount, duration);
+
+      await expect(requestLoan(cu, alice, amount, rate, duration, 0n, {
+        collateralType: COLLATERAL.NFT,
+        collateralEthValue: nftRequirement - 1n,
+        nftId: "NFT-LOW",
+      })).to.be.revertedWith("NFT valuation too low for loan tier");
+
+      await expect(requestLoan(cu, alice, amount, rate, duration, 0n, {
+        collateralType: COLLATERAL.NFT,
+        collateralEthValue: nftRequirement,
+        nftId: "NFT-OK",
+      })).to.emit(cu, "LoanRequested");
+    });
+
+    it("NFT loans reject ETH collateral and guarantors", async function () {
+      const { cu, alice, bob } = await deploy();
+      await joinAndWait(cu, alice, E(2));
+      await joinAndWait(cu, bob, E(10));
+
+      const amount = E(1);
+      const duration = 7 * ONE_DAY;
+      const [rate] = await cu.computeThresholds(alice.address, amount, duration);
+      const nftRequirement = await cu.computeNFTCollateralRequirement(alice.address, amount, duration);
+
+      await expect(requestLoan(cu, alice, amount, rate, duration, E(0.1), {
+        collateralType: COLLATERAL.NFT,
+        collateralEthValue: nftRequirement,
+        nftId: "NFT-ETH",
+      })).to.be.revertedWith("NFT loan cannot lock ETH collateral");
+
+      await expect(requestLoan(cu, alice, amount, rate, duration, 0n, {
+        collateralType: COLLATERAL.NFT,
+        collateralEthValue: nftRequirement,
+        nftId: "NFT-GUAR",
+        guarantor: bob.address,
+      })).to.be.revertedWith("NFT loan cannot use guarantor");
+    });
+
+    it("activates without ETH collateral and does not add NFT value to pool before default", async function () {
+      const { cu, alice, bob } = await deploy();
+      await joinAndWait(cu, alice, E(2));
+      await joinAndWait(cu, bob, E(10));
+
+      const amount = E(1);
+      const duration = 7 * ONE_DAY;
+      const [rate] = await cu.computeThresholds(alice.address, amount, duration);
+      const nftRequirement = await cu.computeNFTCollateralRequirement(alice.address, amount, duration);
+      await requestLoan(cu, alice, amount, rate, duration, 0n, {
+        collateralType: COLLATERAL.NFT,
+        collateralEthValue: nftRequirement,
+        nftId: "NFT-ACTIVE",
+      });
+      const id = await cu.loanCounter();
+      await cu.connect(bob).vote(id, true);
+      await time.increase(3 * ONE_DAY + 1);
+      await cu.finalizeLoan(id);
+
+      const poolBefore = await cu.totalPoolETH();
+      await cu.connect(alice).activateLoan(id, { value: 0 });
+      const loan = await cu.getActiveLoan(id);
+      expect(loan.collateralType).to.equal(COLLATERAL.NFT);
+      expect(loan.collateralLocked).to.equal(0n);
+      expect(await cu.totalPoolETH()).to.equal(poolBefore - amount);
+    });
+
+    it("liquidates stored NFT value on default and redirects excess", async function () {
+      const { cu, alice, bob, keeper } = await deploy();
+      await joinAndWait(cu, alice, E(5));
+      await joinAndWait(cu, bob, E(15));
+
+      const amount = E(1);
+      const duration = 7 * ONE_DAY;
+      const [rate] = await cu.computeThresholds(alice.address, amount, duration);
+      const nftValue = E(3);
+      await requestLoan(cu, alice, amount, rate, duration, 0n, {
+        collateralType: COLLATERAL.NFT,
+        collateralEthValue: nftValue,
+        nftId: "NFT-DEFAULT",
+      });
+      const id = await cu.loanCounter();
+      await cu.connect(bob).vote(id, true);
+      await time.increase(3 * ONE_DAY + 1);
+      await cu.finalizeLoan(id);
+      await cu.connect(alice).activateLoan(id, { value: 0 });
+
+      const aliceSharesBefore = (await cu.members(alice.address)).shares;
+      const bobValueBefore = await cu.getMemberValue(bob.address);
+      await time.increase(8 * ONE_DAY);
+      await expect(cu.connect(keeper).triggerDefault(id))
+        .to.be.revertedWith("Wrong NFT liquidation value");
+      await cu.connect(keeper).triggerDefault(id, { value: nftValue });
+
+      expect((await cu.getLoanRequest(id)).status).to.equal(STATUS.Defaulted);
+      expect((await cu.members(alice.address)).shares).to.be.lt(aliceSharesBefore);
+      expect(await cu.getMemberValue(bob.address)).to.be.gt(bobValueBefore);
+    });
+  });
+
+  // ── 27. Edge cases ────────────────────────────────────────────
 
   describe("edge cases", function () {
 
@@ -1303,7 +1565,7 @@ describe("CreditUnion", function () {
 
       const [threshRate, threshCollat] = await cu.computeThresholds(alice.address, E(0.5), 7 * ONE_DAY);
       const collateralOffered = threshCollat * 110n / 100n;
-      const tx = await cu.connect(alice).requestLoan(E(0.5), threshRate, 7 * ONE_DAY, collateralOffered);
+      const tx = await requestLoan(cu, alice, E(0.5), threshRate, 7 * ONE_DAY, collateralOffered);
       const id = (await tx.wait()).logs.find((l) => l.fragment?.name === "LoanRequested").args[0];
 
       await expect(cu.finalizeLoan(id))
@@ -1327,7 +1589,7 @@ describe("CreditUnion", function () {
 
       const [threshRate, threshCollat] = await cu.computeThresholds(alice.address, E(0.1), 7 * ONE_DAY);
       const collateralOffered = threshCollat * 110n / 100n;
-      const tx = await cu.connect(alice).requestLoan(E(0.1), threshRate, 7 * ONE_DAY, collateralOffered);
+      const tx = await requestLoan(cu, alice, E(0.1), threshRate, 7 * ONE_DAY, collateralOffered);
       const rc = await tx.wait();
       const ev = rc.logs.find((l) => l.fragment?.name === "LoanRequested");
       expect(ev.args[3]).to.equal(tier);

@@ -1,6 +1,6 @@
 # On-Chain Credit Union
 
-A production-grade decentralized credit union implemented as a single Solidity smart contract. Members deposit ETH into a shared pool, vote on loan requests using a stake-and-tenure-weighted voting formula, earn yield from interest repayments, and absorb any uncovered losses from defaults proportionally through share accounting. When a default is collateralized, the punitive excess (seized collateral above bad debt) is redirected exclusively to non-defaulting members via a targeted share burn on the defaulter — defaulters can never benefit from their own seized collateral. No external oracles, no governance tokens, just pure ETH.
+A production-grade decentralized credit union implemented as a single Solidity smart contract. Members deposit ETH into a shared pool, vote on loan requests using a stake-and-tenure-weighted voting formula, earn yield from interest repayments, and absorb any uncovered losses from defaults proportionally through share accounting. Loans can be backed by liquid ETH collateral or trusted demo NFT collateral. ETH remains the only pool liquidity; NFTs only become pool value if liquidated on default. Under-100% ETH collateral requires an explicit guarantor approval during the loan voting window.
 
 ---
 
@@ -12,6 +12,7 @@ A production-grade decentralized credit union implemented as a single Solidity s
 |------|-------------|
 | **Member** | Deposit ETH, earn yield, vote on loan requests, borrow |
 | **Borrower** | A member with an active loan — must repay or face default |
+| **Guarantor** | A member who explicitly approves backing another member's under-100% ETH loan; their available share value is locked until repayment or default |
 | **Treasurer** | Single address set at deployment; can emergency-pause the contract and propose parameter changes. All proposals require a member vote and a 2-day timelock before taking effect. The treasurer role itself can be transferred via a governance vote. |
 | **Keeper** | Anyone who calls `triggerDefault()` on an overdue loan; earns a bounty (≤2% of loan) |
 
@@ -53,7 +54,11 @@ Approval thresholds are dynamic and depend on loan duration: ≤30 days requires
 
 Trust tier additionally requires no prior default AND (≥1 prior successful repayment OR membership ≥30 days).
 
-Collateral is locked by the borrower at `activateLoan` time and returned in full on successful repayment. On default it is seized into the pool: the portion up to the unpaid principal+interest covers the bad debt, and any **excess** (over-collateralization above what was owed) is redirected exclusively to non-defaulting members through a targeted share burn on the defaulter — so the defaulter cannot benefit from their own forfeited collateral via their pool stake. These are *base* rates — the effective minimum collateral for any specific request is then adjusted dynamically by loan size and borrower stake (see formulas below).
+ETH collateral is locked by the borrower at `activateLoan` time and returned in full on successful repayment. If ETH collateral is below 100% of principal, the borrower must nominate a guarantor and that guarantor must call `approveGuarantee(requestId)` before the 3-day voting window closes. Missing approval causes finalization to reject the request even if member votes pass.
+
+NFT collateral uses a trusted demo valuation supplied by the frontend registry. NFT-backed loans require the normal dynamic collateral threshold plus 100% of principal, so a Standard loan with a 45% dynamic threshold requires a 145% NFT valuation. NFT collateral is not counted in `totalPoolETH` before default. In this local demo, triggering an NFT-backed default sends the stored NFT valuation as `msg.value` to simulate liquidation proceeds entering the pool.
+
+On default, ETH collateral or liquidated NFT value is applied to the unpaid principal+interest. Any **excess** is redirected exclusively to non-defaulting members through a targeted share burn on the defaulter. If ETH borrower collateral is insufficient and a guarantor exists, guarantor shares are burned up to the locked guarantee value.
 
 ### Risk-Adjusted Rates & Collateral
 
@@ -103,7 +108,7 @@ A member can hold **at most one active loan at a time**. This is enforced by `ac
 | Action | What's blocked while you have an active loan |
 |---|---|
 | `requestLoan` | Reverts with `"Active loan outstanding"` — you can't even submit a second request |
-| `withdraw` | Reverts — you can't pull your pool stake out while you owe the pool |
+| `withdraw` | Reverts while borrowing; guarantors can withdraw only value not locked behind active guarantees |
 | `repay` | Allowed (this is how you close out) |
 
 Sequential borrowing is fine — repay your current loan and you can immediately request a new one with no cooldown. But **stacking** is impossible: no portfolio borrowing, no concurrent loans across tiers, no single member holding multiple outstanding obligations. Each member has one open exposure to the pool at a time, and the risk model (tier classification, threshold collateral, voting weight) assumes that single-loan view throughout.
@@ -237,7 +242,7 @@ A **Dev Tools** panel lets you advance the local chain clock without leaving the
 npx hardhat test
 ```
 
-Output: **77 tests, all passing**. Test coverage includes:
+Output: **89 tests, all passing**. Test coverage includes:
 
 - Deployment & configuration
 - Membership (join, addDeposit, withdraw)
@@ -247,6 +252,8 @@ Output: **77 tests, all passing**. Test coverage includes:
 - Full loan lifecycle (request → vote → finalize → activate → repay)
 - Partial repayments
 - Default triggering, collateral seizure, and bounty enforcement
+- Explicit guarantor approval, locked guarantee withdrawals, and guarantor share seizure
+- NFT collateral validation, activation, and payable liquidation on default
 - Tier escalation at activation when pool shrinks
 - Share appreciation from interest
 - Pause mechanics and governance-based unpause
@@ -272,12 +279,13 @@ Output: **77 tests, all passing**. Test coverage includes:
 
 | Function | Description |
 |----------|-------------|
-| `requestLoan(amount, interestRate, duration, collateralOffered)` | Submit a loan request with a collateral commitment; tier and min thresholds auto-determined |
+| `requestLoan(amount, interestRate, duration, collateralOffered, collateralType, collateralEthValue, nftId, proposedGuarantor)` | Submit a loan request with ETH or trusted demo NFT collateral metadata |
+| `approveGuarantee(requestId)` | Nominated guarantor explicitly approves backing an under-100% ETH loan before vote deadline |
 | `vote(requestId, support)` | Cast a weighted vote on a pending loan request |
 | `finalizeLoan(requestId)` | Finalize after 3-day voting window; sets Approved or Rejected |
 | `activateLoan(requestId)` | Borrower locks collateral and receives principal (≤7 days after approval) |
 | `repay(loanId)` | Repay part or all of an active loan (partial repayments accepted) |
-| `triggerDefault(loanId)` | Trigger default on an overdue loan; caller earns keeper bounty |
+| `triggerDefault(loanId)` | Trigger default on an overdue loan; NFT defaults require `msg.value` equal to stored NFT valuation; caller earns keeper bounty |
 
 ### Treasurer Controls
 
@@ -308,6 +316,8 @@ Output: **77 tests, all passing**. Test coverage includes:
 | `getTotalVotingWeight()` | Sum of voting weights across all current members (frontends divide by this to render % weight) |
 | `determineTier(amount, duration)` | `LoanTier` enum for given params |
 | `computeThresholds(borrower, amount, duration)` | `(thresholdRate, thresholdCollateral)` — dynamic min rate and collateral for the loan |
+| `computeNFTCollateralRequirement(borrower, amount, duration)` | Trusted demo NFT value required for an NFT-backed loan |
+| `getLoanCollateralInfo(id)` | Collateral type, NFT metadata, guarantor state, and guarantee amount |
 | `getLiveVoteTotals(requestId)` | `(currentTotalWeight, currentVotesFor, currentVotesAgainst)` using each voter's live weight |
 | `getLiveGovVoteTotals(proposalId)` | Same as above for governance proposals |
 | `getBorrowerProfile(address)` | `(hasDefaulted, successfulRepayments, totalDefaulted)` |
@@ -329,4 +339,4 @@ Output: **77 tests, all passing**. Test coverage includes:
 
 ## AI Use Declaration
 
-AI was used to assist with bug fixing during development. All design decisions and project direction were made by the team.
+AI was used to assist with bug fixing during development. All design decisions and project direction were made by the group.

@@ -58,6 +58,9 @@ contract CreditUnion is ReentrancyGuard {
     /// @notice Risk tier assigned at requestLoan time; determines collateral %.
     enum LoanTier      { Trust, Standard, Secured }
 
+    /// @notice Collateral class committed by the borrower.
+    enum CollateralType { ETH, NFT }
+
     /// @notice Parameter types that can be changed through a governance vote.
     enum GovParamType  { MaxLoanSize, MinInterestRate, KeeperBountyRate, Unpause, TransferTreasurer }
 
@@ -91,6 +94,13 @@ contract CreditUnion is ReentrancyGuard {
         uint256    thresholdCollateral;        // dynamic min collateral computed at requestLoan
         uint256    collateralOffered;          // what borrower committed to lock
         uint256    approvalThresholdBps;       // approval difficulty, used by finalizeLoan
+        CollateralType collateralType;
+        uint256    collateralEthValue;         // Trusted demo NFT valuation; 0 for ETH collateral
+        string     nftId;                      // Demo NFT identifier; empty for ETH collateral
+        address    guarantor;                  // Proposed/approved guarantor for under-100% ETH loans
+        bool       requiresGuarantor;
+        bool       guarantorApproved;
+        uint256    guaranteeRequired;          // ETH-value shortfall to 100% principal collateral
     }
 
     struct ActiveLoan {
@@ -104,6 +114,13 @@ contract CreditUnion is ReentrancyGuard {
         bool       defaultTriggered;
         uint256    collateralLocked;    // wei locked by borrower
         LoanTier   tier;
+        CollateralType collateralType;
+        uint256    collateralEthValue;
+        string     nftId;
+        address    guarantor;
+        bool       requiresGuarantor;
+        uint256    guaranteeLocked;    // current locked ETH-value; zero after repayment/default
+        uint256    guaranteeAmount;    // original ETH-value locked at activation for history/views
     }
 
     struct GovernanceProposal {
@@ -201,6 +218,7 @@ contract CreditUnion is ReentrancyGuard {
     // ─────────────────────────────────────────────
 
     mapping(uint256 => uint256) public collateralHeld;         // loanId → wei locked
+    mapping(address => uint256) public lockedGuarantorValueEth; // guarantor → ETH-value backing active loans
     mapping(address => bool)    public hasDefaulted;           // ever defaulted
     mapping(address => uint256) public successfulRepayments;   // count of fully repaid loans
     mapping(address => uint256) public totalDefaulted;         // cumulative bad debt in wei
@@ -223,6 +241,9 @@ contract CreditUnion is ReentrancyGuard {
     event DepositAdded(address indexed member, uint256 amount, uint256 sharesIssued);
     event Withdrawn(address indexed member, uint256 sharesRedeemed, uint256 ethReturned);
     event LoanRequested(uint256 indexed id, address indexed borrower, uint256 amount, LoanTier tier, uint256 collateralRequired);
+    event GuaranteeApproved(uint256 indexed requestId, address indexed guarantor, uint256 guaranteeRequired);
+    event GuaranteeUnlocked(uint256 indexed loanId, address indexed guarantor, uint256 guaranteeValue);
+    event GuarantorSharesSeized(uint256 indexed loanId, address indexed guarantor, uint256 sharesBurned, uint256 valueCovered);
     event VoteCast(uint256 indexed requestId, address indexed voter, bool support, uint256 weight);
     event LoanApproved(uint256 indexed id, address indexed borrower, uint256 amount);
     event LoanRejected(uint256 indexed id);
@@ -331,6 +352,11 @@ contract CreditUnion is ReentrancyGuard {
 
         uint256 ethAmount = (shareAmount * totalPoolETH) / totalShares;
         require(ethAmount > 0, "Zero ETH out");
+        uint256 lockedValue = lockedGuarantorValueEth[msg.sender];
+        if (lockedValue > 0) {
+            uint256 currentValue = (members[msg.sender].shares * totalPoolETH) / totalShares;
+            require(currentValue >= ethAmount + lockedValue, "Shares locked as loan guarantee");
+        }
 
         _checkReserve(totalPoolETH - ethAmount);
 
@@ -370,13 +396,21 @@ contract CreditUnion is ReentrancyGuard {
      * @param amount             Principal in wei.
      * @param interestRate       Rate in basis points (e.g. 800 = 8 %).
      * @param duration           Repayment window in seconds.
-     * @param collateralOffered  Collateral the borrower commits to lock at activation.
+     * @param collateralOffered  ETH collateral the borrower commits to lock at activation.
+     * @param collateralType     ETH or trusted demo NFT collateral.
+     * @param collateralEthValue Trusted demo NFT valuation in wei; 0 for ETH collateral.
+     * @param nftId              Trusted demo NFT identifier; empty for ETH collateral.
+     * @param proposedGuarantor  Guarantor nominated for under-100% ETH loans.
      */
     function requestLoan(
         uint256 amount,
         uint256 interestRate,
         uint256 duration,
-        uint256 collateralOffered
+        uint256 collateralOffered,
+        CollateralType collateralType,
+        uint256 collateralEthValue,
+        string calldata nftId,
+        address proposedGuarantor
     ) external nonReentrant whenNotPaused {
         require(members[msg.sender].exists,  "Not a member");
         require(activeLoanIdOf[msg.sender] == 0, "Active loan outstanding");
@@ -395,7 +429,33 @@ contract CreditUnion is ReentrancyGuard {
         (uint256 threshRate, uint256 threshCollat) = _computeThresholds(msg.sender, amount, duration, tier);
 
         require(interestRate >= threshRate, "Rate below risk threshold");
-        require(collateralOffered >= threshCollat, "Collateral below risk threshold");
+
+        uint256 storedThresholdCollateral = threshCollat;
+        bool requiresGuarantor = false;
+        bool guarantorApproved = false;
+        uint256 guaranteeRequired = 0;
+        address guarantor = address(0);
+
+        if (collateralType == CollateralType.ETH) {
+            require(collateralEthValue == 0, "ETH collateral value must be zero");
+            require(bytes(nftId).length == 0, "ETH loan cannot include NFT");
+            require(collateralOffered >= threshCollat, "Collateral below risk threshold");
+
+            if (collateralOffered < amount) {
+                requiresGuarantor = true;
+                guaranteeRequired = amount - collateralOffered;
+                guarantor = proposedGuarantor;
+                _validateGuarantor(msg.sender, guarantor, guaranteeRequired);
+            } else {
+                require(proposedGuarantor == address(0), "Guarantor not needed");
+            }
+        } else {
+            require(collateralOffered == 0, "NFT loan cannot lock ETH collateral");
+            require(proposedGuarantor == address(0), "NFT loan cannot use guarantor");
+            require(bytes(nftId).length > 0, "Missing NFT id");
+            storedThresholdCollateral = threshCollat + amount;
+            require(collateralEthValue >= storedThresholdCollateral, "NFT valuation too low for loan tier");
+        }
 
         // Trust tier eligibility
         if (tier == LoanTier.Trust) {
@@ -422,7 +482,8 @@ contract CreditUnion is ReentrancyGuard {
             if (approvalThreshBps > APPROVAL_BOOST_BPS) approvalThreshBps -= APPROVAL_BOOST_BPS;
             else approvalThreshBps = 0;
         }
-        if (collateralOffered >= threshCollat * BOOST_THRESHOLD_BPS / BPS_DENOMINATOR) {
+        uint256 boostCollateralValue = collateralType == CollateralType.NFT ? collateralEthValue : collateralOffered;
+        if (boostCollateralValue >= storedThresholdCollateral * BOOST_THRESHOLD_BPS / BPS_DENOMINATOR) {
             if (approvalThreshBps > APPROVAL_BOOST_BPS) approvalThreshBps -= APPROVAL_BOOST_BPS;
             else approvalThreshBps = 0;
         }
@@ -453,12 +514,34 @@ contract CreditUnion is ReentrancyGuard {
             tier                     : tier,
             approvalTimestamp        : 0,
             thresholdRate            : threshRate,
-            thresholdCollateral      : threshCollat,
+            thresholdCollateral      : storedThresholdCollateral,
             collateralOffered        : collateralOffered,
-            approvalThresholdBps     : approvalThreshBps
+            approvalThresholdBps     : approvalThreshBps,
+            collateralType           : collateralType,
+            collateralEthValue       : collateralEthValue,
+            nftId                    : nftId,
+            guarantor                : guarantor,
+            requiresGuarantor        : requiresGuarantor,
+            guarantorApproved        : guarantorApproved,
+            guaranteeRequired        : guaranteeRequired
         });
 
-        emit LoanRequested(id, msg.sender, amount, tier, threshCollat);
+        emit LoanRequested(id, msg.sender, amount, tier, storedThresholdCollateral);
+    }
+
+    /**
+     * @notice Approve a guarantee nomination for an under-100% ETH loan.
+     *         Must be called by the nominated guarantor during the loan vote window.
+     */
+    function approveGuarantee(uint256 requestId) external nonReentrant whenNotPaused {
+        LoanRequest storage req = loanRequests[requestId];
+        require(req.status == LoanStatus.Pending, "Not pending");
+        require(block.timestamp < req.voteDeadline, "Guarantee approval closed");
+        require(req.requiresGuarantor, "Guarantee not required");
+        require(msg.sender == req.guarantor, "Not proposed guarantor");
+        _validateGuarantor(req.borrower, msg.sender, req.guaranteeRequired);
+        req.guarantorApproved = true;
+        emit GuaranteeApproved(requestId, msg.sender, req.guaranteeRequired);
     }
 
     /**
@@ -514,6 +597,12 @@ contract CreditUnion is ReentrancyGuard {
         req.votesFor                  = dynVotesFor;
         req.totalVotingWeightSnapshot = currentTotal;
 
+        if (req.requiresGuarantor && !req.guarantorApproved) {
+            req.status = LoanStatus.Rejected;
+            emit LoanRejected(requestId);
+            return;
+        }
+
         if (dynVotesFor * BPS_DENOMINATOR > currentTotal * req.approvalThresholdBps) {
             req.status            = LoanStatus.Approved;
             req.approvalTimestamp = block.timestamp;
@@ -559,11 +648,27 @@ contract CreditUnion is ReentrancyGuard {
         // If tier escalated, compute new threshold; borrower must cover the higher of
         // their original commitment vs the escalated threshold.
         (, uint256 currentThreshCollat) = _computeThresholds(req.borrower, req.amount, req.duration, activeTier);
-        uint256 requiredCollateral = req.collateralOffered > currentThreshCollat
-            ? req.collateralOffered
-            : currentThreshCollat;
+        uint256 requiredCollateral;
+        uint256 guaranteeToLock;
+        if (req.collateralType == CollateralType.ETH) {
+            requiredCollateral = req.collateralOffered > currentThreshCollat
+                ? req.collateralOffered
+                : currentThreshCollat;
+            require(msg.value == requiredCollateral, "Wrong collateral amount");
 
-        require(msg.value == requiredCollateral, "Wrong collateral amount");
+            guaranteeToLock = req.requiresGuarantor && requiredCollateral < req.amount
+                ? req.amount - requiredCollateral
+                : 0;
+            if (guaranteeToLock > 0) {
+                require(req.guarantorApproved, "Guarantee not approved");
+                _validateGuarantor(req.borrower, req.guarantor, guaranteeToLock);
+                lockedGuarantorValueEth[req.guarantor] += guaranteeToLock;
+            }
+        } else {
+            requiredCollateral = currentThreshCollat + req.amount;
+            require(req.collateralEthValue >= requiredCollateral, "NFT valuation too low for loan tier");
+            require(msg.value == 0, "NFT loan does not accept ETH collateral");
+        }
 
         // Simple interest: principal * rate * duration / (365 days * BPS_DENOMINATOR)
         uint256 interest = (req.amount * req.interestRate * req.duration) /
@@ -580,7 +685,14 @@ contract CreditUnion is ReentrancyGuard {
             repaymentDeadline: block.timestamp + req.duration,
             defaultTriggered : false,
             collateralLocked : msg.value,
-            tier             : activeTier
+            tier             : activeTier,
+            collateralType   : req.collateralType,
+            collateralEthValue: req.collateralEthValue,
+            nftId            : req.nftId,
+            guarantor        : req.guarantor,
+            requiresGuarantor: req.requiresGuarantor,
+            guaranteeLocked  : guaranteeToLock,
+            guaranteeAmount  : guaranteeToLock
         });
 
         req.status = LoanStatus.Active;
@@ -624,6 +736,11 @@ contract CreditUnion is ReentrancyGuard {
             activeLoanIdOf[msg.sender]  = 0;
             successfulRepayments[msg.sender]++;
 
+            if (loan.guaranteeLocked > 0) {
+                _unlockGuarantee(loanId, loan.guarantor, loan.guaranteeLocked);
+                loan.guaranteeLocked = 0;
+            }
+
             uint256 collateral = collateralHeld[loanId];
             if (collateral > 0) {
                 collateralHeld[loanId] = 0;
@@ -641,57 +758,42 @@ contract CreditUnion is ReentrancyGuard {
      *         receives a keeper bounty from the pool.  Callable even when paused.
      * @param loanId Overdue active loan ID.
      */
-    function triggerDefault(uint256 loanId) external nonReentrant {
+    function triggerDefault(uint256 loanId) external payable nonReentrant {
         ActiveLoan storage loan = activeLoans[loanId];
         require(!loan.defaultTriggered, "Already defaulted");
         require(block.timestamp > loan.repaymentDeadline, "Not overdue");
         require(loan.amountRepaid < loan.totalDue, "Already fully repaid");
 
-        uint256 seized = collateralHeld[loanId];
         uint256 grossBadDebt = loan.totalDue - loan.amountRepaid;
 
-        // Split the seized collateral into two parts:
-        //   lossCover = min(seized, grossBadDebt)  — restores the unpaid principal+interest.
-        //                                            All members (including the defaulter)
-        //                                            participate in this share appreciation
-        //                                            because it is just undoing the loss.
-        //   excess    = seized - lossCover         — punitive premium beyond what was owed.
-        //                                            This part must NOT benefit the defaulter,
-        //                                            so we burn just enough of their shares
-        //                                            to keep their per-share value flat
-        //                                            through the excess addition. The excess
-        //                                            then flows entirely to remaining members.
-        uint256 lossCover = seized > grossBadDebt ? grossBadDebt : seized;
-        uint256 excess    = seized > grossBadDebt ? seized - grossBadDebt : 0;
-
-        if (seized > 0) {
-            collateralHeld[loanId] = 0;
-            totalPoolETH += lossCover;
-
-            if (excess > 0) {
-                uint256 defShares = members[loan.borrower].shares;
-                // Only burn if defaulter holds shares AND non-defaulters exist; otherwise
-                // there's no one to redirect the benefit to, so just add the excess plainly.
-                if (defShares > 0 && totalShares > defShares && totalPoolETH > 0) {
-                    // newDefShares chosen so the defaulter's value stays flat:
-                    //   newDefShares × (P + E) / (S − burned) = defShares × P / S
-                    // where P = totalPoolETH (post-lossCover), S = totalShares, E = excess.
-                    // Closed form:
-                    //   newDefShares = defShares × P × (S − defShares)
-                    //                  ÷ [P × (S − defShares) + S × E]
-                    uint256 nonDef = totalShares - defShares;
-                    uint256 numerator   = defShares * totalPoolETH * nonDef;
-                    uint256 denominator = totalPoolETH * nonDef + totalShares * excess;
-                    uint256 newDefShares = numerator / denominator;
-                    uint256 sharesBurned = defShares - newDefShares;
-                    members[loan.borrower].shares = newDefShares;
-                    totalShares -= sharesBurned;
-                }
-                totalPoolETH += excess;
-            }
+        uint256 recoveredValue = loan.collateralType == CollateralType.NFT
+            ? loan.collateralEthValue
+            : collateralHeld[loanId];
+        if (loan.collateralType == CollateralType.NFT) {
+            require(msg.value == recoveredValue, "Wrong NFT liquidation value");
+        } else {
+            require(msg.value == 0, "ETH default does not accept value");
         }
 
-        uint256 remainingBadDebt = grossBadDebt > seized ? grossBadDebt - seized : 0;
+        uint256 remainingBadDebt = _applyRecoveredCollateral(loan.borrower, recoveredValue, grossBadDebt);
+
+        if (collateralHeld[loanId] > 0) {
+            collateralHeld[loanId] = 0;
+        }
+
+        if (remainingBadDebt > 0 && loan.guaranteeLocked > 0) {
+            uint256 coveredByGuarantor = _seizeGuarantorShares(
+                loanId,
+                loan.guarantor,
+                remainingBadDebt,
+                loan.guaranteeLocked
+            );
+            remainingBadDebt -= coveredByGuarantor;
+            loan.guaranteeLocked = 0;
+        } else if (loan.guaranteeLocked > 0) {
+            _unlockGuarantee(loanId, loan.guarantor, loan.guaranteeLocked);
+            loan.guaranteeLocked = 0;
+        }
 
         // Keeper bounty: the lesser of (bountyRate % of bad debt) and (MAX_BOUNTY_BPS % of principal)
         uint256 bounty = (grossBadDebt * keeperBountyRate) / BPS_DENOMINATOR;
@@ -971,6 +1073,48 @@ contract CreditUnion is ReentrancyGuard {
     }
 
     /**
+     * @notice Compute trusted demo NFT collateral requirement.
+     *         NFTs require the normal dynamic threshold plus 100% of principal.
+     */
+    function computeNFTCollateralRequirement(
+        address borrower,
+        uint256 amount,
+        uint256 duration
+    ) external view returns (uint256) {
+        LoanTier tier = _determineTier(amount, duration);
+        (, uint256 threshCollateral) = _computeThresholds(borrower, amount, duration, tier);
+        return threshCollateral + amount;
+    }
+
+    /**
+     * @notice Return collateral metadata for loan cards/frontends.
+     */
+    function getLoanCollateralInfo(uint256 id) external view returns (
+        CollateralType collateralType,
+        uint256 collateralLocked,
+        uint256 collateralEthValue,
+        string memory nftId,
+        address guarantor,
+        bool requiresGuarantor,
+        bool guarantorApproved,
+        uint256 guaranteeValue
+    ) {
+        LoanRequest storage req = loanRequests[id];
+        ActiveLoan storage loan = activeLoans[id];
+        bool activeLike = loan.borrower != address(0);
+        return (
+            activeLike ? loan.collateralType : req.collateralType,
+            activeLike ? loan.collateralLocked : req.collateralOffered,
+            activeLike ? loan.collateralEthValue : req.collateralEthValue,
+            activeLike ? loan.nftId : req.nftId,
+            activeLike ? loan.guarantor : req.guarantor,
+            activeLike ? loan.requiresGuarantor : req.requiresGuarantor,
+            activeLike ? loan.guarantor != address(0) && (loan.guaranteeLocked > 0 || req.guarantorApproved) : req.guarantorApproved,
+            activeLike ? loan.guaranteeAmount : req.guaranteeRequired
+        );
+    }
+
+    /**
      * @notice Return borrower reputation data.
      */
     function getBorrowerProfile(address addr) external view returns (
@@ -1076,6 +1220,88 @@ contract CreditUnion is ReentrancyGuard {
 
         uint256 effectiveBps = baseCollatBps + sizePremiumCollat - stakeDiscount;
         threshCollateral = (amount * effectiveBps) / BPS_DENOMINATOR;
+    }
+
+    function _validateGuarantor(address borrower, address guarantor, uint256 guaranteeValue) internal view {
+        require(guarantor != address(0), "Guarantor required");
+        require(guarantor != borrower, "Guarantor cannot be borrower");
+        require(members[guarantor].exists, "Guarantor not a member");
+        require(_availableGuarantorValue(guarantor) >= guaranteeValue, "Guarantor cannot cover shortfall");
+    }
+
+    function _availableGuarantorValue(address guarantor) internal view returns (uint256) {
+        if (totalShares == 0) return 0;
+        uint256 value = (members[guarantor].shares * totalPoolETH) / totalShares;
+        uint256 locked = lockedGuarantorValueEth[guarantor];
+        return value > locked ? value - locked : 0;
+    }
+
+    function _unlockGuarantee(uint256 loanId, address guarantor, uint256 guaranteeValue) internal {
+        if (guarantor == address(0) || guaranteeValue == 0) return;
+        uint256 locked = lockedGuarantorValueEth[guarantor];
+        lockedGuarantorValueEth[guarantor] = locked > guaranteeValue ? locked - guaranteeValue : 0;
+        emit GuaranteeUnlocked(loanId, guarantor, guaranteeValue);
+    }
+
+    function _seizeGuarantorShares(
+        uint256 loanId,
+        address guarantor,
+        uint256 remainingBadDebt,
+        uint256 guaranteeValue
+    ) internal returns (uint256 coveredValue) {
+        uint256 coverTarget = remainingBadDebt < guaranteeValue ? remainingBadDebt : guaranteeValue;
+        _unlockGuarantee(loanId, guarantor, guaranteeValue);
+        if (coverTarget == 0 || totalPoolETH == 0 || totalShares == 0) return 0;
+
+        uint256 guarantorShares = members[guarantor].shares;
+        uint256 sharesToBurn = (coverTarget * totalShares + totalPoolETH - 1) / totalPoolETH;
+        if (sharesToBurn > guarantorShares) sharesToBurn = guarantorShares;
+        if (sharesToBurn == 0) return 0;
+
+        coveredValue = (sharesToBurn * totalPoolETH) / totalShares;
+        if (coveredValue > remainingBadDebt) coveredValue = remainingBadDebt;
+
+        members[guarantor].shares -= sharesToBurn;
+        totalShares -= sharesToBurn;
+        members[guarantor].depositAmount = totalShares == 0
+            ? 0
+            : (members[guarantor].shares * totalPoolETH) / totalShares;
+
+        emit GuarantorSharesSeized(loanId, guarantor, sharesToBurn, coveredValue);
+    }
+
+    function _applyRecoveredCollateral(
+        address borrower,
+        uint256 recoveredValue,
+        uint256 grossBadDebt
+    ) internal returns (uint256 remainingBadDebt) {
+        uint256 lossCover = recoveredValue > grossBadDebt ? grossBadDebt : recoveredValue;
+        uint256 excess    = recoveredValue > grossBadDebt ? recoveredValue - grossBadDebt : 0;
+
+        if (recoveredValue > 0) {
+            totalPoolETH += lossCover;
+
+            if (excess > 0) {
+                uint256 defShares = members[borrower].shares;
+                // Only burn if defaulter holds shares AND non-defaulters exist; otherwise
+                // there's no one to redirect the benefit to, so just add the excess plainly.
+                if (defShares > 0 && totalShares > defShares && totalPoolETH > 0) {
+                    uint256 nonDef = totalShares - defShares;
+                    uint256 numerator   = defShares * totalPoolETH * nonDef;
+                    uint256 denominator = totalPoolETH * nonDef + totalShares * excess;
+                    uint256 newDefShares = numerator / denominator;
+                    uint256 sharesBurned = defShares - newDefShares;
+                    members[borrower].shares = newDefShares;
+                    totalShares -= sharesBurned;
+                    members[borrower].depositAmount = totalShares == 0
+                        ? 0
+                        : (members[borrower].shares * totalPoolETH) / totalShares;
+                }
+                totalPoolETH += excess;
+            }
+        }
+
+        remainingBadDebt = grossBadDebt > recoveredValue ? grossBadDebt - recoveredValue : 0;
     }
 
     /**

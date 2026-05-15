@@ -266,7 +266,7 @@ describe("CreditUnion", function () {
       const rc = await tx.wait();
       const ev = rc.logs.find((l) => l.fragment?.name === "LoanRequested");
       expect(ev.args[3]).to.equal(TIER.Standard);
-      // Collateral threshold is now dynamic — just verify it's > 0
+      // Dynamic collateral threshold — just verify > 0
       expect(ev.args[4]).to.be.gt(0n);
     });
 
@@ -282,7 +282,7 @@ describe("CreditUnion", function () {
       const rc = await tx.wait();
       const ev = rc.logs.find((l) => l.fragment?.name === "LoanRequested");
       expect(ev.args[3]).to.equal(TIER.Secured);
-      // Collateral threshold is now dynamic — just verify it's > 0
+      // Dynamic collateral threshold — just verify > 0
       expect(ev.args[4]).to.be.gt(0n);
     });
   });
@@ -713,10 +713,8 @@ describe("CreditUnion", function () {
       await cu.connect(alice).activateLoan(loanId, { value: req.collateralOffered });
       await time.increase(8 * ONE_DAY);
 
-      // Measure the keeper's balance delta directly — this is the bounty actually
-      // received, with no dependence on how much collateral was seized into the
-      // pool. (The previous version compared poolBefore-poolAfter, which equals
-      // bounty - seized and can be negative, masking a broken cap.)
+      // Measure the keeper's balance delta directly so the assertion is
+      // independent of how much collateral was seized into the pool.
       const keeperBefore = await ethers.provider.getBalance(keeper.address);
       const tx  = await cu.connect(keeper).triggerDefault(loanId);
       const rc  = await tx.wait();

@@ -15,7 +15,6 @@ async function main() {
   console.log("CreditUnion deployed to:", address);
   console.log("Treasurer:              ", deployer.address);
 
-  // Write contract address for the frontend
   const frontendDir = path.join(__dirname, "../frontend");
   if (!fs.existsSync(frontendDir)) fs.mkdirSync(frontendDir, { recursive: true });
 
@@ -25,7 +24,6 @@ async function main() {
   );
   console.log("→ frontend/contractAddress.json written");
 
-  // Copy ABI from Hardhat artifacts
   const artifact = await artifacts.readArtifact("CreditUnion");
   fs.writeFileSync(
     path.join(frontendDir, "contractABI.json"),

@@ -114,28 +114,35 @@ No MetaMask or browser wallet required. The frontend connects directly to the Ha
 
 ## Quickstart
 
-### 1. Start the development environment
+### 1. Build the image and start the Hardhat node
 
 ```bash
 git clone https://github.com/shettysiddhanth/FITE2010_Credit_Union.git
 cd FITE2010_Credit_Union
-docker compose run --service-ports hardhat bash
+docker compose up -d
 ```
 
-The first build installs dependencies into the image with `npm ci` (using the committed `package-lock.json`), so you don't need to run `npm install` inside the container. If you change `package.json`, rebuild with `docker compose build hardhat`.
+This builds the image (installing dependencies with `npm ci` using the committed `package-lock.json`) and starts a single long-running container whose default command is `npx hardhat node --hostname 0.0.0.0`. The chain is now reachable on `localhost:8545` with 20 funded test accounts (10 000 ETH each).
 
-### 2. Start the Hardhat node (terminal 1)
+To stream chain logs:
 
 ```bash
-npx hardhat node
+docker compose logs -f hardhat
 ```
 
-This starts a local blockchain at `localhost:8545` with 20 funded test accounts (10 000 ETH each).
+If you change `package.json`, rebuild with `docker compose build hardhat`.
 
-### 3. Deploy the contract (terminal 2)
+### 2. Deploy the contract
+
+Open a shell **inside the running container** with `exec` (not `run` — that would spawn a second container and collide on ports):
 
 ```bash
-docker compose run --service-ports hardhat bash   # new terminal
+docker compose exec hardhat bash
+```
+
+Then **inside the container** run:
+
+```bash
 npx hardhat run scripts/deploy.js --network localhost
 ```
 
@@ -144,7 +151,9 @@ The deploy script:
 2. Writes `frontend/contractAddress.json`
 3. Copies the ABI to `frontend/contractABI.json`
 
-### 4. Start the frontend server (terminal 2)
+### 3. Start the frontend server
+
+Stay in the same `exec` shell (or open another with `docker compose exec hardhat bash`), then run **inside the container**:
 
 ```bash
 npm run serve
@@ -152,9 +161,18 @@ npm run serve
 
 Open [http://localhost:3000](http://localhost:3000)
 
-### 5. Select an account
+### 4. Select an account
 
 The header shows an **Account** dropdown pre-populated with all 20 Hardhat test accounts. Pick any account — the frontend connects immediately via `JsonRpcProvider` with no wallet extension needed.
+
+### Stopping and resetting
+
+```bash
+docker compose down                    # stop the container (chain state is lost — Hardhat node is in-memory)
+docker compose down --remove-orphans   # also clean up any leftover containers from older workflows
+```
+
+To start over with a fresh chain, run `docker compose up -d` again — then **re-run Step 2 (Deploy the contract)**. The chain is in-memory and is wiped on every restart, but `frontend/contractAddress.json` still points at the previous deployment, so the frontend will fail silently on every contract call until you redeploy.
 
 ---
 

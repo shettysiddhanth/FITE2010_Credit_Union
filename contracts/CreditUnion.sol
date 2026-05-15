@@ -428,10 +428,14 @@ contract CreditUnion is ReentrancyGuard {
         }
         if (approvalThreshBps < APPROVAL_FLOOR_BPS) approvalThreshBps = APPROVAL_FLOOR_BPS;
 
-        // Snapshot total voting weight across all current members (O(N) loop — bounded
-        // by member count; called only once per loan request, not on every transaction).
+        // Snapshot total voting weight across all current members, EXCLUDING the
+        // borrower — the borrower cannot vote on their own loan, so counting their
+        // weight in the denominator would treat them as a forced "no" against
+        // themselves. O(N) loop, bounded by member count.
         uint256 snapshot = _computeTotalVotingWeight();
-        require(snapshot > 0, "No voting weight in pool");
+        uint256 borrowerWeight = computeVotingWeight(msg.sender);
+        snapshot = snapshot > borrowerWeight ? snapshot - borrowerWeight : 0;
+        require(snapshot > 0, "No eligible voting weight");
 
         loanCounter++;
         uint256 id = loanCounter;
@@ -493,7 +497,11 @@ contract CreditUnion is ReentrancyGuard {
 
         // Dynamic recompute: walk the voter list and weight each voter at their
         // *current* deposit + tenure rather than the weight they had when they cast.
+        // Borrower is excluded from the denominator (they cannot vote on their own loan).
         uint256 currentTotal = _computeTotalVotingWeight();
+        uint256 borrowerWeight = computeVotingWeight(req.borrower);
+        currentTotal = currentTotal > borrowerWeight ? currentTotal - borrowerWeight : 0;
+        require(currentTotal > 0, "No eligible voting weight");
         uint256 dynVotesFor;
         address[] storage voters = loanVoterList[requestId];
         for (uint256 i = 0; i < voters.length; i++) {
@@ -942,6 +950,11 @@ contract CreditUnion is ReentrancyGuard {
         uint256 currentVotesAgainst
     ) {
         currentTotalWeight = _computeTotalVotingWeight();
+        address borrower = loanRequests[requestId].borrower;
+        if (borrower != address(0)) {
+            uint256 bw = computeVotingWeight(borrower);
+            currentTotalWeight = currentTotalWeight > bw ? currentTotalWeight - bw : 0;
+        }
         address[] storage voters = loanVoterList[requestId];
         for (uint256 i = 0; i < voters.length; i++) {
             address v = voters[i];

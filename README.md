@@ -38,7 +38,7 @@ Both components use integer approximations:
 - **log2**: O(1) unrolled MSB bit-length lookup; no loops.
 - New members (<30 days) have `months=0`, so `log2(1)=0` → weight zero. This prevents flash-deposit governance attacks.
 
-Approval thresholds are dynamic and depend on loan duration: ≤30 days requires 50%, 31–90 days requires 55%, >90 days requires 60% of the total voting weight. Offering ≥130% of the threshold rate or threshold collateral each reduces the required majority by 10% (combined floor 35%). Voting weights are **recomputed at finalization** from each voter's current deposit and tenure — not snapshotted at cast time — so a member who tops up or withdraws between casting and finalization sees their vote weight change accordingly. Abstentions count against (the total includes all members, not just those who voted).
+Approval thresholds are dynamic and depend on loan duration: ≤30 days requires 50%, 31–90 days requires 55%, >90 days requires 60% of the **eligible** voting weight. Offering ≥130% of the threshold rate or threshold collateral each reduces the required majority by 10% (combined floor 35%). Voting weights are **recomputed at finalization** from each voter's current deposit and tenure — not snapshotted at cast time — so a member who tops up or withdraws between casting and finalization sees their vote weight change accordingly. The borrower is **excluded from the denominator** (they can't vote on their own loan, so counting their weight would be a forced "no" against themselves). Abstentions by *other* members still count against — the denominator is every eligible voter, not just those who cast.
 
 ### Loan Tiers & Collateral
 

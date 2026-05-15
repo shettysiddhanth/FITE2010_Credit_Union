@@ -1,12 +1,18 @@
 # Transaction Walkthrough
 
-A concrete end-to-end example of a loan moving through every state in the contract — request → vote → activation → default — with every ETH movement, share update, and on-chain state change tracked at each step.
+A concrete end-to-end example of a loan moving through every state in the contract — request → vote → activation → repayment or default — with every ETH movement, share update, and on-chain state change tracked at each step.
 
-This is meant as a hands-on companion to [README.md](README.md). The README explains *why* the system works the way it does; this document shows *what actually happens* in numbers.
+This document explores **three contrasting cases** from the same starting pool state:
+
+- **Case 1 — Normal collateral, loan repaid** *(the happy path).* Borrower posts just above the minimum required collateral, uses the principal, repays on time. Demonstrates how interest yield flows to all members.
+- **Case 2 — Normal collateral, loan defaulted** *(the strategic-default problem).* Same loan as Case 1, but the borrower walks away. Demonstrates the *socialized-loss* path **and shows that the contract's collateral threshold can be too thin to deter strategic default on its own.**
+- **Case 3 — Over-collateralized loan, defaulted** *(the share-burn punitive path).* Borrower posts much more collateral than required, then walks away. Demonstrates the share-burn mechanic that redirects the punitive excess to non-defaulting members.
+
+All three cases share the same setup so the numbers can be compared directly. This is meant as a hands-on companion to [README.md](README.md). The README explains *why* the system works the way it does; this document shows *what actually happens* in numbers.
 
 ---
 
-## Setup
+## Shared Setup
 
 A fresh pool with three members. All balances in ETH.
 
@@ -26,35 +32,46 @@ After all three deposits:
 | `members[acct0].shares` | 1,000 (50% of pool) |
 | `members[acct1].shares` | 500  (25% of pool) |
 | `members[acct2].shares` | 500  (25% of pool) |
-| `acct0` member value | 1,000 |
-| `acct1` member value | 500 |
-| `acct2` member value | 500 |
 
 > Tenure of 31 days is required for non-zero voting weight, since `log2(months+1)` is 0 for the first 30 days.
 
+Approximate voting weights (∝ `sqrt(depositWei) × log2(months+1)`):
+
+```
+acct0 ≈ 3.16 × 10^10    (~41% of total)
+acct1 ≈ 2.24 × 10^10    (~29% of total)
+acct2 ≈ 2.24 × 10^10    (~29% of total)
+total ≈ 7.64 × 10^10
+```
+
+The exact units don't matter — only the ratios. The cases below use weights as fractions of the total.
+
+Each case is **independent** — they start from the same shared setup and proceed down different paths. The numbers don't compound between cases.
+
 ---
 
-## Step 1 — `acct0` requests a 100 ETH loan
+# Case 1 — Normal Collateral → Repaid (happy path)
 
-`acct0` wants to borrow 100 ETH for 30 days, offering 10.75% interest and 250 ETH of collateral.
+**Borrower:** acct1
+**Story:** acct1 needs 100 ETH for 30 days to capture a short-term opportunity (e.g., a payment due before incoming funds settle). They want to borrow as cheaply as possible, so they offer **40 ETH collateral** — just above the contract's minimum of 36.25 ETH for their stake position. They don't qualify for the boost (would need ~47), but the loan is well-priced, and acct1 expects easy approval from acct0 and acct2 who know them.
+
+## 1.1 — `acct1` requests the loan
 
 ```solidity
-creditUnion.connect(acct0).requestLoan(
+creditUnion.connect(acct1).requestLoan(
     100 ether,      // amount
     1075,           // 10.75% in bps
-    30 * 86400,     // 30 days in seconds
-    250 ether       // collateralOffered
+    30 * 86400,     // 30 days
+    40 ether        // collateralOffered (just above minimum)
 );
 ```
 
-### What the contract computes
-
-**Tier classification** ([CreditUnion.sol:_determineTier](contracts/CreditUnion.sol)):
+### Tier classification
 
 - Trust requires `amount ≤ 2% of pool` (= 40) AND duration ≤ 30 days. 100 > 40 → fails.
 - Standard requires `amount ≤ 10% of pool` (= 200) AND duration ≤ 90 days. 100 ≤ 200 AND 30 ≤ 90 → **Standard tier**.
 
-**Threshold rate**:
+### Threshold rate
 
 ```
 loanPoolBps     = 100·10000 / 2000  = 500 bps   (5% of pool)
@@ -65,129 +82,67 @@ threshRate      = 800 + 50 + 164    = 1014 bps  (10.14%)
 
 Offered 1075 bps (10.75%) > 1014 bps → **passes**.
 
-**Threshold collateral** (Standard tier base = 4000 bps = 40%):
+### Threshold collateral (Standard base = 4000 bps = 40%)
 
 ```
-stakePoolBps      = 1000·10000/2000   = 5000 bps  (acct0 owns 50%)
-stakeDiscount     = 5000 / 4          = 1250 bps   (cap = 4000/4 = 1000 → CAPPED to 1000)
-sizePremiumCollat = 500 / 2           = 250 bps    (cap 1500, not hit)
-effectiveBps      = 4000 + 250 - 1000 = 3250 bps
-threshCollateral  = 100·3250/10000    = 32.5 ETH
+stakePoolBps      = 500·10000/2000   = 2500 bps   (acct1 owns 25%)
+stakeDiscount     = 2500 / 4         = 625 bps    (cap = 1000, not hit)
+sizePremiumCollat = 500 / 2          = 250 bps
+effectiveBps      = 4000 + 250 - 625 = 3625 bps
+threshCollateral  = 100·3625/10000   = 36.25 ETH
 ```
 
-Offered 250 ETH ≫ 32.5 → **passes**.
+acct1 offers 40 ETH > 36.25 → **passes** (thin margin).
 
-**Approval majority** (30-day loan → base 50%):
+### Approval majority
 
-- Rate boost? Needs offered ≥ 130% × 1014 = 1318 bps. Offered 1075 < 1318 → **no rate boost**.
-- Collateral boost? Needs offered ≥ 130% × 32.5 = 42.25. Offered 250 ≫ 42.25 → **collateral boost applies (−10%)**.
-- Final required: 50% − 10% = **40%**.
+- Base for 30-day loan: **50%**.
+- Rate boost? 130% × 1014 = 1318. Offered 1075 < 1318 → **no rate boost**.
+- Collateral boost? 130% × 36.25 = 47.13. Offered 40 < 47.13 → **no collateral boost**.
+- Final required majority: **50%** of eligible weight (full base, no discounts).
 
-**Voting denominator**:
-
-```
-totalVotingWeight  = sum over all members of computeVotingWeight()
-                   ≈ sqrt(1000e18)·1 + sqrt(500e18)·1 + sqrt(500e18)·1
-                   ≈ 3.16e10 + 2.24e10 + 2.24e10
-                   ≈ 7.64e10
-```
-
-Then the **borrower's weight is subtracted** ([CreditUnion.sol requestLoan](contracts/CreditUnion.sol)):
+### Eligible voting weight (borrower excluded)
 
 ```
-borrowerWeight  ≈ 3.16e10
-snapshot        ≈ 7.64e10 − 3.16e10 = 4.48e10
+totalWeight    ≈ 7.64 × 10^10
+borrowerWeight ≈ 2.24 × 10^10   (acct1)
+eligibleWeight ≈ 5.40 × 10^10   (acct0 + acct2)
 ```
 
-The 40% threshold is computed against this 4.48e10 — not the full 7.64e10. acct1 and acct2 between them control 100% of the eligible voting weight.
+## 1.2 — Voting
 
-### State changes
+acct0 votes **YES**, acct2 abstains.
 
-- `loanCounter` → 1
-- `loanRequests[1]` populated with all the above
-- `loanRequests[1].status` = `Pending`
-- `voteDeadline` = `block.timestamp + 3 days`
-- No ETH moves.
+```
+votesFor   ≈ 3.16 × 10^10   (acct0's weight)
+           = ~58.5% of eligible weight
+required   = 50%
+58.5% > 50% → on track to pass
+```
 
----
+## 1.3 — Finalize
 
-## Step 2 — Voting
+After 3 days, anyone calls `finalizeLoan(1)`. Result: **Approved**.
 
-acct1 votes **YES**, acct2 abstains.
+## 1.4 — `activateLoan` — acct1 locks 40 ETH, receives 100 ETH
 
 ```solidity
-creditUnion.connect(acct1).vote(1, true);
-// acct2 never calls vote()
+creditUnion.connect(acct1).activateLoan(1, { value: 40 ether });
 ```
 
-- `loanVoterList[1]` = `[acct1]`
-- `loanVoteSupport[1][acct1]` = `true`
-- No ETH moves.
+- Interest = `100 × 1075 × 30 / 365 / 10000` ≈ **0.884 ETH** → `totalDue` = 100.884
 
-### Live tally during voting (acct1 votes yes, acct2 silent)
-
-```
-currentTotal  (excl. borrower) ≈ 4.48e10
-votesFor                       ≈ 2.24e10   (acct1's weight)
-                               = 50% of eligible
-required                       = 40%
-```
-
-Currently passing. Abstentions from acct2 act against (they're in the denominator but not in the numerator) but acct1 alone gets it across the 40% line.
-
----
-
-## Step 3 — Time passes; `finalizeLoan` called
-
-After the 3-day window elapses, **anyone** can call:
-
-```solidity
-creditUnion.finalizeLoan(1);
-```
-
-The contract recomputes weights at *current* tenure/deposit (not the snapshot taken at request), subtracts the borrower again, then compares votesFor to the threshold.
-
-Assuming nothing changed:
-
-```
-dynVotesFor / currentTotal  ≈ 2.24e10 / 4.48e10 ≈ 50%
-50% > 40% required  →  Approved
-```
-
-- `loanRequests[1].status` = `Approved`
-- `loanRequests[1].approvalTimestamp` = `block.timestamp`
-- emits `LoanApproved(1, acct0, 100 ether)`
-- No ETH moves.
-
----
-
-## Step 4 — `activateLoan` (acct0 locks collateral, receives principal)
-
-```solidity
-creditUnion.connect(acct0).activateLoan(1, { value: 250 ether });
-```
-
-### Re-checks at activation
-
-- Pool cap (20%): 100 ≤ 0.2 × 2000 = 400 → passes
-- Reserve check: pool after disbursement (1900) ≥ 10% of totalDepositsEver (200) → passes
-- Tier re-evaluated against current pool — still Standard
-- Collateral required = max(original 250, current threshold ≈ 32.5) = 250
-- `msg.value == 250` → matches → passes
-- Interest = `100 × 1075 × 2,592,000 / (31,536,000 × 10,000)` ≈ **0.884 ETH**
-
-### State after activateLoan
+### State after activation
 
 | State | Before | After | Delta |
 |---|---|---|---|
-| `totalPoolETH` | 2,000 | 1,900 | −100 |
-| `collateralHeld[1]` | 0 | 250 | +250 |
-| `acct0` wallet | 10,000 − 1,000 = 9,000 | 9,000 − 250 + 100 = **8,850** | −150 |
-| `acct0` shares | 1,000 | 1,000 | 0 |
-| `totalShares` | 2,000 | 2,000 | 0 |
-| Contract ETH balance | 2,000 | 1,900 + 250 = **2,150** | +150 |
+| `totalPoolETH` | 2,000 | **1,900** | −100 |
+| `collateralHeld[1]` | 0 | **40** | +40 |
+| `acct1` wallet | 9,500 | 9,500 − 40 + 100 = **9,560** | **+60** |
+| `acct1` shares | 500 | 500 | 0 |
+| Contract ETH balance | 2,000 | **1,940** | −60 |
 
-### Member values *drop* proportionally (loan went out of the pool)
+Member values drop proportionally (100 ETH left the pool):
 
 | Account | Pre-loan value | Post-activation value | Drop |
 |---|---|---|---|
@@ -195,141 +150,341 @@ creditUnion.connect(acct0).activateLoan(1, { value: 250 ether });
 | acct1 (25%) | 500 | 500 × 1,900 / 2,000 = **475** | −25 |
 | acct2 (25%) | 500 | 500 × 1,900 / 2,000 = **475** | −25 |
 
-acct0's *total* worth: 8,850 (wallet) + 950 (shares) = **9,800**. Compared to pre-loan 10,000 wallet, they're down 200: 100 of that is "they're holding the loan principal in their wallet so it's still theirs", and the 100 actual loss is split as 50 inside their shares dropping + 150 in over-collateralization. Recombining: −150 wallet net + (+100 of which is their share's worth of the loan they took) = effectively −250 they paid for collateral, +100 loan in hand. Their *liquid* loss is 150 ETH (the over-collateral); the 100 loan will be repaid back to the pool later.
+## 1.5 — Day 28 — `acct1` repays in full
 
----
-
-## Step 5 — Time passes past deadline; loan goes overdue
-
-acct0 doesn't call `repay`. After `block.timestamp > repaymentDeadline` (30 days after activation), anyone can trigger default.
+acct1 had a profitable 28 days, generated revenue, and now repays before the deadline.
 
 ```solidity
-creditUnion.connect(acct3).triggerDefault(1);
+creditUnion.connect(acct1).repay(1, { value: 100.884 ether });
 ```
 
-### What happens, in order
+### What `repay` does on full repayment ([CreditUnion.sol:605-633](contracts/CreditUnion.sol#L605-L633))
 
-1. **Compute components**:
-   ```
-   grossBadDebt = totalDue − amountRepaid = 100.884 − 0 = 100.884
-   seized       = 250
-   lossCover    = min(250, 100.884) = 100.884
-   excess       = 250 − 100.884     = 149.116
-   ```
+1. **Adds the payment to the pool** — `totalPoolETH += 100.884` → pool grows to **2,000.884**.
+2. **Returns the collateral** — `collateralHeld[1] = 0`, sends 40 ETH back to acct1.
+3. **Flags the loan as repaid** — `loanRequests[1].status = Repaid`.
+4. **Clears the active-loan pointer** — `activeLoanIdOf[acct1] = 0`.
+5. **Updates reputation** — `successfulRepayments[acct1]++`.
 
-2. **Bad-debt cover added to pool** (all members participate proportionally — this is just undoing the loan loss):
-   ```
-   totalPoolETH: 1,900 → 1,900 + 100.884 = 2,000.884
-   ```
+### State after repayment
 
-3. **Excess flows only to non-defaulters via proportional share burn on acct0**:
-   ```
-   defShares  = 1,000
-   nonDef     = 2,000 − 1,000 = 1,000
-   P          = 2,000.884   (pool after lossCover)
-   E          = 149.116
-   numerator   = 1,000 × 2,000.884 × 1,000           = 2.000884e9
-   denominator = 2,000.884 × 1,000 + 2,000 × 149.116 = 2,299.116e3
-   newDefShares = numerator / denominator             ≈ 870.29
-   sharesBurned = 1,000 − 870.29                      ≈ 129.71
-   ```
+| Account | Pre-loan value | After repayment | Net change |
+|---|---|---|---|
+| acct0 (50%) | 1,000 | 1,000 × 2,000.884 / 2,000 = **1,000.442** | **+0.442** |
+| acct1 (25%) | 500 | 500 × 2,000.884 / 2,000 = **500.221** | **+0.221** |
+| acct2 (25%) | 500 | 500 × 2,000.884 / 2,000 = **500.221** | **+0.221** |
 
-   Then add excess to the pool:
-   ```
-   totalPoolETH: 2,000.884 → 2,150  (back to the contract's actual ETH balance, minus bounty)
-   totalShares:  2,000     → 1,870.29
-   acct0 shares: 1,000     → 870.29
-   ```
+Total interest distributed: 0.442 + 0.221 + 0.221 = **0.884** ✓ (matches the interest acct1 paid).
 
-4. **Keeper bounty** (smaller of 1% of bad debt or 2% of principal):
-   ```
-   keeperBountyRate = 100 bps (default 1%)
-   bounty           = min(100.884 × 0.01, 100 × 0.02) = min(1.009, 2) = 1.009 ETH
-   totalPoolETH     → 2,150 − 1.009 = 2,148.99
-   ```
+### Economic outcomes (Case 1)
 
-5. **Status flags and transfer**:
-   - `loan.defaultTriggered` = `true`
-   - `loanRequests[1].status` = `Defaulted`
-   - `hasDefaulted[acct0]` = `true`
-   - `totalDefaulted[acct0]` += 100.884
-   - 1.009 ETH transferred to `acct3` (keeper)
-
-### State after default
-
-| State | Before default | After default |
-|---|---|---|
-| `totalPoolETH` | 1,900 | **2,148.99** (+248.99) |
-| `totalShares` | 2,000 | **1,870.29** |
-| `acct0` shares | 1,000 | **870.29** (−129.71 burned) |
-| `acct1` shares | 500 | 500 |
-| `acct2` shares | 500 | 500 |
-| `acct0` wallet | 8,850 | 8,850 (untouched) |
-| `acct3` wallet | 10,000 | **10,001.01** (keeper bounty) |
-| `collateralHeld[1]` | 250 | 0 |
-
-### Member values after default — the punchline
-
-| Account | Shares | Total share fraction | Member value (= shares × 2148.99 / 1870.29) | Change vs pre-loan |
-|---|---|---|---|---|
-| acct0 (defaulter) | 870.29 | 46.5% | **≈ 1,000.44** | **+0.44** (their 50% share of the recovered interest) |
-| acct1 | 500 | 26.7% | **≈ 574.72** | **+74.72** |
-| acct2 | 500 | 26.7% | **≈ 574.72** | **+74.72** |
-
-**The defaulter's pool value is held flat through the *excess* addition** — that's what the share burn is calibrated for. They end up at the post-lossCover value (≈ pre-loan + their share of the recovered interest), not at zero change from pre-loan. That tiny uplift is structurally identical to what would happen on a normal repayment: when a borrower-member repays interest, that interest is distributed to all members through share appreciation, and the borrower captures their own ownership-fraction back. The default flow mirrors this — the interest portion of `lossCover` is the same dividend whether it came from a wallet repayment or from collateral.
-
-**The non-defaulters captured the entire excess plus their share of the interest** — ~74.72 each ≈ 149.44 total = 149.116 excess + 0.328 (their combined 50% of the 0.884 interest, since the other half went to the defaulter's shares). (Tiny rounding from integer division.)
-
-### acct0's total economic outcome
-
-| Bucket | Change |
+| Party | Net change vs pre-loan |
 |---|---|
-| Wallet: paid 250 collateral | −250 |
-| Wallet: received 100 loan principal | +100 |
-| Pool share value | 1,000 → ≈ 1,000.44 (their share of the interest dividend) |
-| **Total loss to defaulter** | **≈ −149.56 ETH** |
+| **acct1** (borrower) | wallet: 9,500 → 9,499.116 (interest paid); pool: +0.221 → effectively **−0.663 ETH** (interest cost net of their own pool dividend) |
+| **acct0** | pool +0.442 (yield from acct1's interest, 50% share) |
+| **acct2** | pool +0.221 (yield, 25% share) |
 
-That ≈ 149.56 is essentially the 150 over-collateralization premium they posted as a forfeiture bond, minus the small interest dividend they captured on their remaining shares (same dividend any borrower-member captures from interest they themselves pay). The bulk of the premium went to honest members — not back to themselves.
+acct1's net cost of borrowing 100 ETH for 28 days: **0.663 ETH**. They had +60 net spendable cash for the loan period, and their net cost was just the interest minus their own share dividend.
 
-### acct1 and acct2's outcome
-
-Each was −25 during the active loan, then +74.72 at default. Net **≈ +49.72** each — they took on real risk (a member was about to walk) and got paid the over-collateralization premium plus their share of the interest as compensation.
+**This is what the contract is built for.** Pool members earn yield, borrower gets working capital, everyone wins.
 
 ---
 
-## Step 6 — Loan history view
+# Case 2 — Normal Collateral → Defaulted (the strategic-default problem)
 
-The frontend (and any caller of `getLoanRequest(1)` + `getActiveLoan(1)`) sees:
+**Borrower:** acct1
+**Story:** Same request as Case 1 — 100 ETH, 40 collateral. But this time acct1 walks away. **The deliberately thin collateral (just barely above the threshold) makes this scenario interesting:** there's no excess for the share-burn mechanic to redistribute, so the contract falls back on socialized loss. And as we'll see, the threshold the contract calculated isn't enough to make default unprofitable for the borrower — they end up *ahead*.
 
-- `loanRequests[1].status` = `Defaulted`
-- `loan.principal` = 100
-- `loan.interest` = 0.884
-- `loan.amountRepaid` = 0
-- `loan.collateralLocked` = 250
-- `hasDefaulted[acct0]` = `true`
+Steps 2.1 through 2.4 are identical to Case 1. We pick up at the activation:
 
-`acct0` is now permanently excluded from the Trust tier and flagged for borrower-profile lookups.
+### State after activation (same as Case 1)
+
+| State | Value |
+|---|---|
+| `totalPoolETH` | 1,900 |
+| `collateralHeld[1]` | 40 |
+| `acct1` wallet | 9,560 |
+| Member values | acct0: 950, acct1: 475, acct2: 475 |
+
+## 2.5 — acct1 walks away; loan goes overdue
+
+30+ days pass. acct1 doesn't call `repay`. acct3 calls `triggerDefault(1)` to collect the bounty.
+
+### Math inside `triggerDefault`
+
+```
+seized       = collateralHeld[1] = 40
+grossBadDebt = totalDue − amountRepaid = 100.884
+lossCover    = min(40, 100.884) = 40           ← whole seizure used to cover bad debt
+excess       = 40 − 100.884 = 0                ← no excess; share burn does NOT fire
+remainingBadDebt = 100.884 − 40 = 60.884       ← socialized across all members
+```
+
+**Phase 1 — Add `lossCover` to pool**:
+```
+totalPoolETH:  1,900 → 1,900 + 40 = 1,940
+totalShares:   2,000 (unchanged — no share burn because excess = 0)
+acct1 shares:  500 (unchanged)
+```
+
+**Phase 2 — Share burn skipped** (because excess = 0).
+
+**Phase 3 — Keeper bounty**:
+```
+bounty = min(100.884 × 0.01, 100 × 0.02) = 1.009 ETH
+totalPoolETH: 1,940 → 1,938.991
+acct3 wallet: 10,000 → 10,001.01
+```
+
+### Final state (Case 2)
+
+| State | After default |
+|---|---|
+| `totalPoolETH` | **1,938.991** (started 2,000, net loss of 61.009) |
+| `totalShares` | **2,000** (no burns) |
+| `acct1` shares | **500** (unchanged) |
+| `acct1` wallet | **9,560** (untouched — keeps the 100 they borrowed) |
+| `acct3` wallet | **10,001.01** (keeper bounty) |
+| `hasDefaulted[acct1]` | `true` (permanent flag) |
+| `totalDefaulted[acct1]` | `100.884` |
+
+### Member values after default — losses socialized proportionally
+
+| Account | Pre-loan value | After default | Net change |
+|---|---|---|---|
+| acct0 (50%) | 1,000 | 1,000 × 1,938.991 / 2,000 = **969.50** | **−30.50** |
+| acct1 (25%) | 500 | 500 × 1,938.991 / 2,000 = **484.75** | **−15.25** |
+| acct2 (25%) | 500 | 500 × 1,938.991 / 2,000 = **484.75** | **−15.25** |
+
+Total pool-value loss: 30.50 + 15.25 + 15.25 = **61.00** ≈ 60.884 bad-debt + 1.009 bounty − rounding ✓
+
+### Economic outcomes (Case 2)
+
+| Party | Net change vs pre-loan |
+|---|---|
+| **acct1** (defaulter) | wallet **+60** (kept the 100 loan, paid 40 collateral); pool **−15.25**; net **+44.75 ETH ahead** ⚠️ |
+| **acct0** | pool **−30.50** |
+| **acct2** | pool **−15.25** |
+| **acct3** (keeper) | wallet **+1.01** |
+
+### ⚠️ The strategic-default problem
+
+acct1 walked away from the loan and ended up **+44.75 ETH richer** than where they started. They lost their 40 ETH collateral and took a 15.25 ETH hit to their pool stake, but they kept the entire 100 ETH principal — net positive. The honest members (acct0, acct2) collectively lost 45.75 ETH to subsidize this.
+
+**Why this happens:** the contract's collateral threshold (36.25 ETH) is too low to prevent strategic default. When `collateral < principal`, walking away is profitable by `principal − collateral − borrower's_share_of_socialized_loss`. The share-burn mechanic only activates when `seized > badDebt`, so under-collateralized defaults bypass it entirely.
+
+**What protects the pool from this in practice:**
+1. **Voting filter.** Members can refuse to approve loans they think will default. In Case 1 acct0 voted yes because they trusted acct1; if acct1 looked sketchy, the vote would fail and the loan wouldn't activate.
+2. **Reputation flag.** `hasDefaulted[acct1] = true` is permanent. They're barred from Trust tier forever, and any future loan request will reveal the prior default — other members can vote no. But a strategic attacker can simply spin up a new wallet.
+3. **Sybil resistance via tenure.** New wallets have zero voting weight for the first 30 days and can't request Trust loans without proven repayment history. This slows down repeat strategic defaults but doesn't stop a patient attacker.
+
+**The fix the contract is missing:** collateral threshold should be `≥ principal + interest` to make default strictly unprofitable in a single-loan-isolated sense. The current threshold of 36.25 on a 100 loan is *under*-collateralized by design (Standard base is 40% of principal). The contract relies on social filtering (the vote) and reputation cost to bridge the gap. **For a high-trust community this is workable; for an anonymous adversarial setting it is not.**
+
+This is the deeper reason Case 3 (over-collateralization) matters — that's the only configuration where the math itself prevents strategic profit.
 
 ---
 
-## What if collateral had been *under* the bad debt?
+# Case 3 — Over-Collateralized → Defaulted (share-burn mechanic in action)
 
-Suppose acct0 had only posted 80 ETH collateral on a loan that ended up owing 100.884:
+**Borrower:** acct0
+**Story:** acct0 wants to borrow 100 ETH for 30 days. The minimum collateral the contract would accept is ~32.5 ETH (Standard tier, adjusted by their 50% pool stake). But acct0 deliberately posts **250 ETH** — well above the 130%-of-threshold mark — specifically to qualify for the *approval boost*. With the boost, the required vote majority drops from 50% to 40%, making approval easier on a contentious request.
+
+**Why a borrower might rationally do this:** if you don't trust that other members will approve your loan on price/duration alone, an over-collateralization signal can swing the vote. Of course, if you then default, you forfeit all that extra collateral — so this strategy only makes sense if you *intend* to repay.
+
+acct0 turns out to default anyway. Watch what happens to the excess.
+
+## 3.1 — `acct0` requests the loan
+
+```solidity
+creditUnion.connect(acct0).requestLoan(
+    100 ether,      // amount
+    1075,           // 10.75% in bps
+    30 * 86400,     // 30 days
+    250 ether       // collateralOffered (~7.7× minimum)
+);
+```
+
+### Tier classification
+Same as before: **Standard tier**.
+
+### Threshold rate
+Same as before: **1014 bps**. acct0 offers 1075 → passes.
+
+### Threshold collateral — different because acct0 has a larger stake
 
 ```
-seized    = 80
-lossCover = 80          (the whole seizure goes to covering bad debt)
-excess    = 0           (no excess, no share burn)
-remainingBadDebt = 100.884 − 80 = 20.884
+stakePoolBps      = 1000·10000/2000   = 5000 bps  (acct0 owns 50%)
+stakeDiscount     = 5000 / 4          = 1250 bps  (cap = 4000/4 = 1000 → CAPPED)
+sizePremiumCollat = 500 / 2           = 250 bps
+effectiveBps      = 4000 + 250 - 1000 = 3250 bps
+threshCollateral  = 100·3250/10000    = 32.5 ETH
 ```
 
-- No share burn — acct0 keeps all their shares.
-- `totalPoolETH` only gains 80, but the pool was 100 lighter from the loan disbursement.
-- Net: `totalPoolETH` ends 20.884 below pre-loan, plus the bounty.
-- All members' share values **drop** — this is the socialized loss case described in the README.
-- acct0 still loses their 80 ETH collateral.
+acct0 offers 250 ≫ 32.5 → **passes massively**.
 
-The share burn mechanism is *only* triggered when collateral genuinely over-secured the loan. Under-collateralized defaults distribute the pain to everyone, as before.
+### Approval majority
+
+- Base for 30-day loan: **50%**.
+- Rate boost? 130% × 1014 = 1318. Offered 1075 < 1318 → **no rate boost**.
+- Collateral boost? 130% × 32.5 = 42.25. Offered 250 ≫ 42.25 → **collateral boost applies (−10%)**.
+- Final required majority: 50% − 10% = **40%** of eligible weight.
+
+### Eligible voting weight
+
+```
+totalWeight    ≈ 7.64 × 10^10
+borrowerWeight ≈ 3.16 × 10^10   (acct0)
+eligibleWeight ≈ 4.48 × 10^10   (acct1 + acct2)
+```
+
+## 3.2 — Voting
+
+acct1 votes **YES**, acct2 abstains.
+
+```
+votesFor   ≈ 2.24 × 10^10   (acct1's weight)
+           = ~50% of eligible weight
+required   = 40%
+50% > 40% → passes (and would have been close without the boost)
+```
+
+The boost lowered the bar enough that a single supporter could carry the vote. This is the rational reason to over-collateralize.
+
+## 3.3 — Finalize
+
+`finalizeLoan(1)` after 3 days. Result: **Approved**.
+
+## 3.4 — `activateLoan` — acct0 locks 250 ETH, receives 100 ETH
+
+```solidity
+creditUnion.connect(acct0).activateLoan(1, { value: 250 ether });
+```
+
+### State after activation
+
+| State | Before | After | Delta |
+|---|---|---|---|
+| `totalPoolETH` | 2,000 | 1,900 | −100 |
+| `collateralHeld[1]` | 0 | **250** | +250 |
+| `acct0` wallet | 9,000 | 9,000 − 250 + 100 = **8,850** | **−150** |
+| `acct0` shares | 1,000 | 1,000 | 0 |
+
+Contrast with Case 1 (acct1 with 40 collateral): acct1's wallet went up 60, acct0's wallet went *down* 150. acct0 has paid 150 ETH out-of-pocket for the use of 100 ETH of pool capital — a deeply over-collateralized position.
+
+Member values drop proportionally (same as Case 1 and 2):
+
+| Account | Pre-loan value | Post-activation value | Drop |
+|---|---|---|---|
+| acct0 (50%) | 1,000 | **950** | −50 |
+| acct1 (25%) | 500 | **475** | −25 |
+| acct2 (25%) | 500 | **475** | −25 |
+
+## 3.5 — acct0 fails to repay; loan goes overdue
+
+acct3 calls `triggerDefault(1)`.
+
+### Math inside `triggerDefault`
+
+```
+seized       = collateralHeld[1] = 250
+grossBadDebt = totalDue − amountRepaid = 100.884
+lossCover    = min(250, 100.884) = 100.884
+excess       = 250 − 100.884     = 149.116    ← share burn fires
+```
+
+**Phase 1 — Add `lossCover` to pool** (all members share):
+```
+totalPoolETH:  1,900 → 2,000.884
+acct0 value:   950   → 1,000 × 2,000.884 / 2,000 = 1,000.442  (+0.442 = their share of interest)
+```
+
+**Phase 2 — Share burn on acct0** (calibrated to keep acct0 flat through the excess addition):
+```
+defShares  = 1,000
+nonDef     = 1,000
+P          = 2,000.884
+E          = 149.116
+
+numerator     = 1,000 × 2,000.884 × 1,000           = 2.000884 × 10⁹
+denominator   = 2,000.884 × 1,000 + 2,000 × 149.116 ≈ 2,299,116
+newDefShares  = numerator / denominator             ≈ 870.29
+sharesBurned  ≈ 129.71
+
+totalPoolETH:  2,000.884 → 2,150
+totalShares:   2,000     → 1,870.29
+acct0 shares:  1,000     → 870.29
+```
+
+**Phase 3 — Keeper bounty**:
+```
+bounty = min(100.884 × 0.01, 100 × 0.02) = 1.009 ETH
+totalPoolETH: 2,150 → 2,148.991
+acct3 wallet: 10,000 → 10,001.01
+```
+
+### Final state (Case 3)
+
+| State | After default |
+|---|---|
+| `totalPoolETH` | **2,148.991** (started 2,000, gained 148.99 net) |
+| `totalShares` | **1,870.29** (129.71 burned from acct0) |
+| `acct0` shares | **870.29** |
+| `acct0` wallet | **8,850** (untouched at default — already paid the 150 at activation) |
+| `acct3` wallet | **10,001.01** (keeper bounty) |
+| `hasDefaulted[acct0]` | `true` |
+
+### Member values after default
+
+| Account | Shares | Member value | Net change |
+|---|---|---|---|
+| acct0 (defaulter) | 870.29 | 870.29 × 2,148.991 / 1,870.29 = **≈ 1,000.44** | **+0.44** (just the interest dividend) |
+| acct1 | 500 | 500 × 2,148.991 / 1,870.29 = **≈ 574.72** | **+74.72** |
+| acct2 | 500 | 500 × 2,148.991 / 1,870.29 = **≈ 574.72** | **+74.72** |
+
+### Economic outcomes (Case 3)
+
+| Party | Net change vs pre-loan |
+|---|---|
+| **acct0** (defaulter) | wallet −150 (over-collateralization paid at activation); pool +0.44; **≈ −149.56 ETH total** |
+| **acct1** | pool +74.72 (was −25 during loan, recovered then captured excess) |
+| **acct2** | pool +74.72 (same) |
+| **acct3** (keeper) | wallet +1.01 |
+
+acct0's loss is essentially the 150 over-collateralization premium they posted. The share-burn math made sure that 150 went **to honest members** instead of back to themselves through their own pool stake. Compare to Case 2 where the defaulter went *up* 44.75 — here the over-collateralization plus the share-burn redistribution flips the math decisively in the pool's favor.
+
+---
+
+# Side-by-Side Summary
+
+|  | Case 1 (repaid) | Case 2 (under/just-met-threshold default) | Case 3 (over-collateralized default) |
+|---|---|---|---|
+| Borrower | acct1 (25% stake) | acct1 (25% stake) | acct0 (50% stake) |
+| Principal | 100 | 100 | 100 |
+| Min collateral required | 36.25 | 36.25 | 32.5 |
+| Collateral posted | **40** (1.1× min) | **40** (1.1× min) | **250** (7.7× min) |
+| Approval boost? | No | No | Yes (collateral boost) |
+| Required majority | 50% | 50% | 40% |
+| Borrower cash flow at activation | **+60** | **+60** | **−150** |
+| Outcome | Repaid in full | Defaulted | Defaulted |
+| Share burn fires? | n/a | **No** (excess = 0) | **Yes** (excess ≈ 149) |
+| Pool change vs pre-loan | +0.884 | **−61.01** (socialized loss) | +148.99 (excess captured) |
+| Borrower's total economic outcome | **−0.66** (interest, net of dividend) | **+44.75 ⚠️** (profitable default) | **−149.56** (premium forfeited) |
+| acct0's pool change | +0.442 | **−30.50** | +0.44 (defaulter) |
+| acct1's pool change | +0.221 (defaulter, see borrower row) | **−15.25** (defaulter, see borrower row) | +74.72 |
+| acct2's pool change | +0.221 | **−15.25** | +74.72 |
+| `hasDefaulted[borrower]` | false | true (permanent) | true (permanent) |
+| `successfulRepayments[borrower]` | +1 | unchanged | unchanged |
+
+## Key takeaways
+
+**Case 1 vs Case 2 (same loan terms, different outcomes):**
+If everyone repays, everyone wins (small but positive). If a borrower defaults at minimum threshold collateral, the borrower walks away with +44.75 and the honest pool members eat the loss collectively. **The thin collateral threshold isn't a deterrent on its own — voting and reputation have to do the work.**
+
+**Case 2 vs Case 3 (both defaults, different collateral):**
+The share-burn mechanic only fires when collateral *exceeds* bad debt. Below that threshold, default is profitable for the borrower; above it, default is heavily punitive. The contract's collateral baselines (15% / 40% / 75% by tier) are *under* the level that would make default mathematically unprofitable on its own — Trust at 15% leaves the largest gap, Secured at 75% the smallest.
+
+**Practical implication:**
+Borrowers in good standing should request the **lowest tier they qualify for**, post the **minimum collateral**, and **repay on time** — that's Case 1, and it's a clean economic outcome for everyone. The over-collateralization in Case 3 only makes sense as an approval-boost mechanism for contentious requests, and only if the borrower fully intends to repay. From the pool's perspective, the safest defense against Case-2-style strategic defaults is **rejecting suspicious loan requests at the voting stage** — once activated, the contract's math can't recover what was lost.
 
 ---
 
@@ -338,4 +493,6 @@ The share burn mechanism is *only* triggered when collateral genuinely over-secu
 1. **The defaulter never benefits from the *excess* portion of their forfeited collateral** — the share burn is exactly calibrated so their pool value is held flat across the excess addition. They do still receive their pro-rata share of the bad-debt cover (which includes the unpaid principal *and* unpaid interest) — this is consistent with how a normal repayment behaves, where the borrower-member captures their own ownership-fraction of any interest they pay back via share appreciation.
 2. **The bad-debt cover is shared by all** — this is not a punishment, it's just undoing the loan loss (principal portion) plus crediting the interest that the borrower nominally owed. All members (including the defaulter, on their remaining shares) participate.
 3. **The punitive premium flows to honest members** — non-defaulters' shares appreciate by the full excess amount, distributed pro-rata to their pre-default ownership of the non-defaulter slice.
-4. **ETH is conserved** — every wei moves from one place to another (defaulter wallet → pool, pool → keeper, etc.). The contract never mints or destroys ETH; only redistributes it.
+4. **Successful repayment distributes interest yield to all members pro-rata** — including the borrower's own share. The borrower's net interest cost is `interest_paid × (1 − borrower_ownership_fraction)`.
+5. **Below-threshold-coverage defaults socialize loss** — when collateral doesn't cover bad debt (Case 2), all members' shares depreciate proportionally and the defaulter can come out ahead. The contract delegates protection against this scenario to the voting system and reputation flags, not to the collateral math itself.
+6. **ETH is conserved** — every wei moves from one place to another (defaulter wallet → pool, pool → keeper, borrower wallet → pool, etc.). The contract never mints or destroys ETH; only redistributes it.

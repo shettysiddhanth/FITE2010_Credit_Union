@@ -246,18 +246,20 @@ async function refreshTab(tab) {
 
 async function renderOverview() {
   try {
-    const [pool, memberValue, weight, totalWeight, memberData, paused] = await Promise.all([
+    const [pool, memberValue, weight, totalWeight, memberData, paused, walletBal] = await Promise.all([
       contract.getPool(),
       contract.getMemberValue(signerAddress),
       contract.computeVotingWeight(signerAddress),
       contract.getTotalVotingWeight(),
       contract.members(signerAddress),
       contract.paused(),
+      provider.getBalance(signerAddress),
     ]);
 
     document.getElementById("pool-eth").textContent     = formatEth(pool[0]) + " ETH";
     document.getElementById("pool-members").textContent = pool[2].toString();
     document.getElementById("pool-loans").textContent   = pool[3].toString();
+    document.getElementById("my-wallet").textContent    = formatEth(walletBal) + " ETH";
     document.getElementById("my-value").textContent     = formatEth(memberValue) + " ETH";
     document.getElementById("my-weight").textContent    = formatVotingWeightPct(weight, totalWeight);
 

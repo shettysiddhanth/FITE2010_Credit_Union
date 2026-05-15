@@ -5,10 +5,12 @@ A concrete end-to-end example of a loan moving through every state in the contra
 This document explores **three contrasting cases** from the same starting pool state:
 
 - **Case 1 — Normal collateral, loan repaid** *(the happy path).* Borrower posts just above the minimum required collateral, uses the principal, repays on time. Demonstrates how interest yield flows to all members.
-- **Case 2 — Normal collateral, loan defaulted** *(the strategic-default problem).* Same loan as Case 1, but the borrower walks away. Demonstrates the *socialized-loss* path **and shows that the contract's collateral threshold can be too thin to deter strategic default on its own.**
+- **Case 2 — Normal collateral with guarantor, loan defaulted** *(the strategic-default problem).* Same loan as Case 1, but the borrower walks away. Because borrower collateral was under 100% of principal, a guarantor was required at request time; on default, the guarantor's pool shares are burned to cover the shortfall instead of the loss being socialized across all members. Even so, **the borrower still profits from default** — the system's real defense is voting and reputation, not collateral math.
 - **Case 3 — Over-collateralized loan, defaulted** *(the share-burn punitive path).* Borrower posts much more collateral than required, then walks away. Demonstrates the share-burn mechanic that redirects the punitive excess to non-defaulting members.
 
 All three cases share the same setup so the numbers can be compared directly. This is meant as a hands-on companion to [README.md](README.md). The README explains *why* the system works the way it does; this document shows *what actually happens* in numbers.
+
+For a compact mapping of which UI values come from your wallet vs the contract pool, see [docs/WALLET_VS_POOL.md](docs/WALLET_VS_POOL.md).
 
 ---
 
@@ -482,7 +484,7 @@ acct0's loss is essentially the 150 over-collateralization premium they posted. 
 | Pool change vs pre-loan | +0.884 | **−61.01** (guarantor-absorbed) | +148.99 (excess captured) |
 | Borrower's total economic outcome | **−0.66** (interest, net of dividend) | **+60.22 ⚠️** (profitable default) | **−149.56** (premium forfeited) |
 | acct0's pool change | +0.442 | **−61.45** (guarantor seizure) | +0.44 (defaulter) |
-| acct1's pool change | +0.221 (defaulter, see borrower row) | **+0.22** (defaulter, see borrower row) | +74.78 |
+| acct1's pool change | +0.221 | **+0.22** (defaulter in Case 2) | +74.78 |
 | acct2's pool change | +0.221 | **+0.22** | +74.78 |
 | `hasDefaulted[borrower]` | false | true (permanent) | true (permanent) |
 | `successfulRepayments[borrower]` | +1 | unchanged | unchanged |

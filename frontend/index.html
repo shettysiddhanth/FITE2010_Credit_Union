@@ -51,7 +51,11 @@
           <div class="stat-value mono" id="pool-loans">—</div>
         </div>
         <div class="stat-card">
-          <div class="stat-label">Your ETH Value</div>
+          <div class="stat-label">Your Wallet ETH</div>
+          <div class="stat-value mono" id="my-wallet">—</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Your Pool Value</div>
           <div class="stat-value mono" id="my-value">—</div>
         </div>
         <div class="stat-card">
@@ -246,11 +250,12 @@
             <tr><td>Total Pool ETH</td><td>ETH currently held in the contract. Grows as interest is repaid; shrinks when loans are disbursed or default bounties are paid.</td></tr>
             <tr><td>Total Members</td><td>Number of addresses that have joined the union.</td></tr>
             <tr><td>Total Loans</td><td>Cumulative count of all loan requests ever submitted.</td></tr>
-            <tr><td>Your ETH Value</td><td>The current ETH value of your pool shares. Increases as interest accrues.</td></tr>
+            <tr><td>Your Pool Value</td><td>The current ETH value of your pool shares — your pro‑rata portion of <code>totalPoolETH</code>. This is different from <strong>Your Wallet ETH</strong>, which is the ETH balance in your external account. Repayments move ETH from wallets into the pool; borrowers pay interest from their wallet, which increases <code>totalPoolETH</code>.</td></tr>
             <tr><td>Your Voting Weight</td><td>Your influence in loan and governance votes, shown as a percentage of total pool voting power. Zero until you have been a member for ≥ 30 days.</td></tr>
             <tr><td>Membership</td><td>Whether you have an active membership.</td></tr>
           </tbody>
         </table>
+        <p class="guide-desc"><strong>Wallet vs Pool:</strong> <em>Your Wallet ETH</em> is the ETH held by your account (outside the contract). <em>Your Pool Value</em> is what your shares are worth inside the contract. When a borrower repays interest, ETH flows from their wallet into the pool — the pool grows while the borrower's external wallet balance decreases by the same amount (minus gas).</p>
         <p class="guide-desc"><strong>Deposit</strong> — Send ETH to join (first deposit) or add to your existing position. Minimum 0.01 ETH. You receive pool shares proportional to your deposit. Adding to your deposit also increases your voting weight immediately.</p>
         <p class="guide-desc"><strong>Withdraw</strong> — Enter the ETH amount you want to redeem. Your shares are burned and ETH is returned. Blocked while you have an active loan. Subject to the 10% reserve requirement.</p>
         <p class="guide-desc"><strong>Dev Tools</strong> — Advances the Hardhat chain clock without waiting in real time. Always advance by ≥ 31 days before your first loan request so members have voting weight.</p>

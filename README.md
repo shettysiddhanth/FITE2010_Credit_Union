@@ -1,6 +1,6 @@
 # On-Chain Credit Union
 
-A production-grade decentralized credit union implemented as a single Solidity smart contract. Members deposit ETH into a shared pool, vote on loan requests using a stake-and-tenure-weighted voting formula, earn yield from interest repayments, and absorb any uncovered losses from defaults proportionally through share accounting. Loans can be backed by liquid ETH collateral or trusted demo NFT collateral. ETH remains the only pool liquidity; NFTs only become pool value if liquidated on default. Under-100% ETH collateral requires an explicit guarantor approval during the loan voting window.
+A decentralized credit union implemented as a single Solidity smart contract. Members deposit ETH into a shared pool, vote on loan requests using a stake-and-tenure-weighted voting formula, earn yield from interest repayments, and absorb any uncovered losses from defaults proportionally through share accounting. Loans can be backed by liquid ETH collateral or trusted demo NFT collateral. ETH remains the only pool liquidity; NFTs only become pool value if liquidated on default. Under-100% ETH collateral requires an explicit guarantor approval during the loan voting window.
 
 ---
 
@@ -198,6 +198,8 @@ docker compose down --remove-orphans   # also clean up any leftover containers f
 ```
 
 To start over with a fresh chain, run `docker compose up -d` again — then **re-run Step 2 (Deploy the contract)**. The chain is in-memory and is wiped on every restart, but `frontend/contractAddress.json` still points at the previous deployment, so the frontend will fail silently on every contract call until you redeploy.
+
+Quick reference: see the wallet vs pool mapping at [docs/WALLET_VS_POOL.md](docs/WALLET_VS_POOL.md).
 
 ---
 

@@ -533,7 +533,7 @@ describe("CreditUnion", function () {
   // ── 12. activateLoan() — wrong collateral ─────────────────────
 
   describe("activateLoan() — wrong collateral", function () {
-    it("reverts if msg.value != collateralRequired", async function () {
+    it("reverts if msg.value != collateralOffered", async function () {
       const { cu, alice, bob } = await deploy();
       await joinAndWait(cu, alice, E(2));
       await joinAndWait(cu, bob, E(10));

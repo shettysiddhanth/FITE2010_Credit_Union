@@ -32,9 +32,12 @@ import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
  *
  * Loan tiers
  * ----------
- *   Trust    (Tier 0) : amount ≤ 2% pool  AND duration ≤ 30 days → 0% collateral
- *   Standard (Tier 1) : amount ≤ 10% pool AND duration ≤ 90 days → 20% collateral
- *   Secured  (Tier 2) : everything else                           → 50% collateral
+ *   Trust    (Tier 0) : amount ≤ 2% pool  AND duration ≤ 30 days → 15% base collateral
+ *   Standard (Tier 1) : amount ≤ 10% pool AND duration ≤ 90 days → 40% base collateral
+ *   Secured  (Tier 2) : everything else                           → 75% base collateral
+ *
+ *   Base collateral is then adjusted dynamically by loan-to-pool size
+ *   (size premium) and borrower stake (skin-in-the-game discount).
  *
  *   Trust tier requires: no prior default AND
  *   (≥1 prior successful repayment OR membership ≥ 30 days).
